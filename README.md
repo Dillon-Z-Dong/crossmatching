@@ -1,5 +1,7 @@
 # crossmatching
-Python crossmatching tools designed for automated workflows and large datasets. Current catalogs:
+Python crossmatching tools designed for automated workflows and large datasets. 
+
+Current catalogs:
 
 (1) STRM (neural net classifications ['galaxy',''star','qso','unsure'] for all objects detected in Panstarrs DR1.) 
 For details see:
