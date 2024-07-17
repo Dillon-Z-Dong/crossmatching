@@ -34,6 +34,7 @@ def read_hdf5_list(filenames, datadir, requested_cols, input_match_cat, match_ra
 	match_indices = []
 	match_distances = []
 
+	strm_cat_start = time.perf_counter()
 	with ThreadPoolExecutor(max_workers=n_threads) as executor:  
 			# Map the read_hdf5 function to the list of files
 			results = executor.map(lambda file: read_hdf5(file, requested_cols), [os.path.join(datadir,x) for x in filenames])
@@ -52,27 +53,47 @@ def read_hdf5_list(filenames, datadir, requested_cols, input_match_cat, match_ra
 				
 
 	# Create SkyCoord object out of filtered dataframe
-	strm_cat_start = time.perf_counter()
 	strm_match_cat = SkyCoord(ra = np.array(combined_df['raMean'])*u.deg, dec = np.array(combined_df['decMean'])*u.deg)
 	strm_cat_end = time.perf_counter()
 
 	if verbose:
-		print(f'Catalog creation time: {(strm_cat_end - strm_cat_start):.2f} seconds')
+		print(f'Data read + catalog creation time: {(strm_cat_end - strm_cat_start):.2f} seconds')
 
 	#Cross match
+	if n_matches > 1:
+		skdt = 'tree'
+	else:
+		skdt = False
+
+	original_indices = np.arange(len(input_match_cat))
+	latest_matched_indices = np.arange(len(input_match_cat))
 	for k in range(1,n_matches+1):
-		idx,d2d, _ = match_coordinates_sky(input_match_cat,strm_match_cat,nthneighbor=k)
+		match_start = time.perf_counter()
+
+		#if k == 1 or n_matches == 1:
+		#	idx,d2d, _ = match_coordinates_sky(input_match_cat,strm_match_cat,nthneighbor=k)#, storekdtree = skdt) 
+		#else:
+		match_cat_k = input_match_cat[latest_matched_indices]
+
+		if verbose:
+			print(f'Cross matching {len(match_cat_k)} input points for k = {k}, match_radius = {match_radius}')
+
+		idx,d2d,_ = match_coordinates_sky(match_cat_k,strm_match_cat,nthneighbor=k)#, storekdtree = skdt) 
 
 		if match_radius is not None:
 			matches = np.where(d2d < match_radius)
-			match_indices.append(matches)
+			latest_matched_indices = latest_matched_indices[matches] #Only need to cross match those that had >0 matches in the previous round
+
+			match_indices.append(original_indices[latest_matched_indices]) #latest_matched_indices was updated to reflect the latest round in the previous line
 			match_distances.append(d2d[matches].arcsec)
+			print(f'len idx = {len(idx)}')
+			print(f'len combined_df: {len(combined_df)}')
 			match_tables.append(combined_df.iloc[idx[matches]])
 
 			if verbose:
-				print(f'Found {len(matches[0])} matches for k = {k}, match_radius = {match_radius}')
+				print(f'Found {len(matches[0])} matches ({(100*len(matches[0])/len(input_match_cat)):.4f}% of input catalog) in {(time.perf_counter()-match_start):.4f} seconds\n')
 		else:
-			match_indices.append(np.arange(len(input_match_cat)))
+			match_indices.append(original_indices)
 			match_distances.append(d2d.arcsec)
 			match_tables.append(combined_df.iloc[idx])
 
@@ -205,6 +226,8 @@ def STRM_crossmatch(
 	- matched_tab_list: STRM properties of matches
 		
 	'''
+	if verbose:
+		fstart = time.perf_counter()
 
 	# Load metadata table and skycoord
 	metadata_table = pd.read_csv(os.path.join(datadir,metadata_table))
@@ -234,7 +257,7 @@ def STRM_crossmatch(
 	chunks = partition_files(nearest_tiles_names, nearest_tiles_sizes, max_chunk_size.to(u.MB).value)
 	
 	if verbose:
-		print(f'Partitioned {len(set(nearest_tiles_index))} nearest tiles to the {len(matchable_cat)} matchable input coordinates into {len(chunks)} chunks of size < {max_chunk_size}')
+		print(f'Partitioned {len(set(nearest_tiles_index))} nearest tiles to the {len(matchable_cat)} matchable input coordinates into {len(chunks)} chunks of size < {max_chunk_size} in {(time.perf_counter()-fstart):.2f} seconds')
 
 	# Initialize lists that will store the final results
 	matched_index_list = [np.array([], dtype = 'object') for _ in range(n_matches)]
@@ -269,7 +292,7 @@ def STRM_crossmatch(
 
 		if verbose:
 			loop_end = time.perf_counter()
-			print(f'\nRuntime: {(loop_end - loop_start):.4f} seconds')
+			print(f'\nMatch loop runtime: {(loop_end - loop_start):.4f} seconds')
 			print('----------------------------------------------------------------------------------------------------------------------------------------------')
 		
 		#Concatenate results
@@ -277,7 +300,13 @@ def STRM_crossmatch(
 		matched_distance_list = [np.concatenate([matched_distance_list[i],match_distances[i]]) for i in range(n_matches)]
 		matched_tab_list = [pd.concat([matched_tab_list[i], match_tables[i]]) for i in range(n_matches)]
 
+		#Convert np array types
+		matched_index_list = [x.astype('int') for x in matched_index_list]
+		matched_distance_list = [x.astype('int') for x in matched_distance_list]
 
+		if verbose:
+			fend = time.perf_counter()
+			print(f'Total runtime: {(fend-fstart):.2f} seconds')
 	return matched_index_list, matched_distance_list, matched_tab_list
 
 
@@ -285,7 +314,7 @@ def STRM_crossmatch(
 if __name__ == '__main__':
 	
 	#Test
-	nrand = 1_000_000
+	nrand = 10_000_000
 
 	rand_ra_start = 20.0
 	rand_dec_start = 15.0
@@ -308,5 +337,5 @@ if __name__ == '__main__':
 	out = STRM_crossmatch(rand_coords, verbose = verbose, match_radius = match_radius, n_matches = n_matches, requested_cols = ['objID','z_phot','z_photErr','z_phot0'], selection_function = STRM_type_filter, objtype = 'galaxy')
 	run_end = time.time()
 	
-	print(f'Finished crossmatch in {(run_end-run_start):.2f} seconds\n')
+	
 
