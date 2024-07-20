@@ -64,26 +64,28 @@ def initialize_match_tab(match_tab=None, columns=['input_ra_deg', 'input_dec_deg
 
 
 def crossmatch_skycoords(input_cat: SkyCoord, match_tab: pd.DataFrame, n_matches: int = 1,\
-	match_function = null_match_function, **match_function_kwargs):
+	match_cat: SkyCoord = None, hierarchical_optimization:bool = None, match_function = null_match_function, **match_function_kwargs):
 	'''General crossmatching between input_cat (your points) and match_cat (catalog points)
 	Input your favorite match function (e.g., const_or_variable_radius_match_function, or something fancier)
 	Does a blind row selection on match_tab (catalog other info) and returns a list of match_tab rows (length n_matches) for each k-th neighbor
 	match_tab must have 
 	'''
 
-	# Whether or not to use the hierarchical optimization for various match functions
+	# Decide whether or not to use the hierarchical optimization for various match functions if not specified
+	if hierarchical_optimization is None:
 
-	hierarchical_optimization_mapping = {
-		null_match_function: True,
-		const_or_variable_radius_match_function: True,
-		normalized_match_function: False
-	}
+		hierarchical_optimization_mapping = {
+			null_match_function: True,
+			const_or_variable_radius_match_function: True,
+			normalized_match_function: False
+		}
 
-	# Set hierarchical_optimization based on the match_function
-	hierarchical_optimization = hierarchical_optimization_mapping.get(match_function, False)
+		# Set hierarchical_optimization based on the match_function
+		hierarchical_optimization = hierarchical_optimization_mapping.get(match_function, False)
 
-	# Create match_cat from match_tab
-	match_cat = SkyCoord(ra = np.array(match_tab['catalog_ra_deg']))
+	# Create match_cat from match_tab if one does not exist
+	if match_cat is None:
+		match_cat = SkyCoord(ra = np.array(match_tab['catalog_ra_deg']), dec = np.array(match_tab['catalog_dec_deg']))
 
 	# Determine whether we should save the kd tree. Currently saving if we're making multiple searches on a tree of length > 1e6.
 	if n_matches > 1 and len(match_cat) > 1e6:
