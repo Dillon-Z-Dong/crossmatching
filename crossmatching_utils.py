@@ -3,6 +3,7 @@ from astropy.coordinates import SkyCoord, match_coordinates_sky
 import astropy.units as u
 import os
 import pandas as pd
+import time
 
 
 ########### Custom match functions
@@ -63,9 +64,10 @@ def initialize_match_tab(match_tab=None, columns=['input_ra_deg', 'input_dec_deg
 	return match_tab
 
 
-def crossmatch_skycoords(input_cat: SkyCoord, match_tab: pd.DataFrame, n_matches: int = 1,\
-	match_cat: SkyCoord = None, hierarchical_optimization:bool = None, match_function = null_match_function, **match_function_kwargs):
-	'''General crossmatching between input_cat (your points) and match_cat (catalog points)
+def crossmatch_skycoords(input_cat: SkyCoord, match_tab: pd.DataFrame, \
+	n_matches: int = 1, match_cat: SkyCoord = None, hierarchical_optimization:bool = None, verbose:bool = False, match_function = null_match_function, **match_function_kwargs):
+	'''General crossmatching between input_cat (your points) and either a user provided match_cat (catalog points) or one generated from match_tab
+		- if using match_tab, the columns 'catalog_ra_deg', and 'catalog_dec_deg' must exist
 	Input your favorite match function (e.g., const_or_variable_radius_match_function, or something fancier)
 	Does a blind row selection on match_tab (catalog other info) and returns a list of match_tab rows (length n_matches) for each k-th neighbor
 	match_tab must have 
@@ -101,25 +103,42 @@ def crossmatch_skycoords(input_cat: SkyCoord, match_tab: pd.DataFrame, n_matches
 	if hierarchical_optimization:
 		latest_matched_indices = np.arange(len(input_cat))
 
+	if verbose:
+		kwargs_str = ', '.join(f'{k} = {v}' for k, v in match_function_kwargs.items())
+		print('----------------------')
+		print(f'Running crossmatch_skycoord with with match function {match_function.__name__}, kwargs {kwargs_str}, and {hierarchical_optimization = }')
+		print('----------------------')
+
 	for k in range(1,n_matches+1):
+
 		input_cat_k = input_cat[latest_matched_indices]
+		if verbose:
+			print(f'Crossmatching {len(input_cat_k)} input points against {len(match_cat)} catalog points looking for the {k = }-th nearest neighbor')
+			start = time.perf_counter()
+
 		idx,d2d,_ = match_coordinates_sky(input_cat_k, match_cat, nthneighbor=k, storekdtree = skdt) 
 		matches = match_function(idx = idx, d2d = d2d, **match_function_kwargs)
 
 		if hierarchical_optimization:
 			latest_matched_indices = latest_matched_indices[matches]
-			latest_match_tab = match_tab.iloc[idx[matches]]
+			latest_match_tab = match_tab.iloc[idx[matches]].copy()
 			
 		else:
 			latest_match_tab = match_tab.copy()
 
-		latest_match_tab['input_ra_deg'] = input_cat_k.ra.deg
-		latest_match_tab['input_dec_deg'] = input_cat_k.dec.deg
-		latest_match_tab['distance_arcsec'] = d2d[matches]
-		latest_match_tab['position_angle'] = input_cat_k[matches].position_angle(match_cat[idx[matches]])
+		latest_match_tab['input_ra_deg'] = input_cat_k[matches].ra.deg
+		latest_match_tab['input_dec_deg'] = input_cat_k[matches].dec.deg
+		latest_match_tab['distance_arcsec'] = d2d[matches].to(u.arcsec).value
+		latest_match_tab['position_angle_deg'] = input_cat_k[matches].position_angle(match_cat[idx[matches]]).deg
 
 		# Append results to output
 		match_tables.append(latest_match_tab)
 
+		if verbose:
+			loop_runtime = time.perf_counter() - start
+			print(f'Found {len(matches[0])} matches in {loop_runtime:.4f} seconds\n') 
+
+	if verbose:
+		print('----------------------')
 
 	return match_tables
