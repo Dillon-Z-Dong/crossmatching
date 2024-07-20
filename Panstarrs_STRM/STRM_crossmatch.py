@@ -12,8 +12,16 @@ import itertools
 from concurrent.futures import ThreadPoolExecutor
 import time
 import itertools
+from collections import defaultdict
+from itertools import product
 
-from crossmatching_utils import crossmatch_skycoords, const_or_variable_radius_match_function
+from crossmatching_utils import crossmatch_skycoords, const_or_variable_radius_match_function, sort_col_order
+
+#Testing / profiling
+import cProfile
+import pstats
+import io
+
 
 '''
 Functions for batch crossmatching against the neural net source classifications in the PS1-STRM catalog
@@ -28,7 +36,7 @@ def read_hdf5(file, requested_cols, required_cols = ['raMean', 'decMean','class'
 
 
 
-def read_hdf5_list(filenames, datadir, requested_cols, input_match_cat, match_radius, n_matches, n_threads, verbose, selection_function, **selection_function_kwargs):
+def read_hdf5_list(filenames, requested_cols, input_match_cat, match_radius, n_matches, n_threads, verbose, selection_function, **selection_function_kwargs):
 	''' The hot loop for STRM cross matching'''
 
 	match_tables = []
@@ -38,7 +46,7 @@ def read_hdf5_list(filenames, datadir, requested_cols, input_match_cat, match_ra
 	strm_cat_start = time.perf_counter()
 	with ThreadPoolExecutor(max_workers=n_threads) as executor:  
 			# Map the read_hdf5 function to the list of files
-			results = executor.map(lambda file: read_hdf5(file, requested_cols), [os.path.join(datadir,x) for x in filenames])
+			results = executor.map(lambda file: read_hdf5(file, requested_cols), filenames)
 
 			# Collect the results into a list
 			dataframes = list(results)
@@ -80,48 +88,6 @@ def read_hdf5_list(filenames, datadir, requested_cols, input_match_cat, match_ra
 	return match_tables
 
 
-def partition_files(nearest_tiles_names, nearest_tiles_sizes, total_file_size):
-	''' Partitions the hdf5 files into chunks using the greedy algorithm'''
-
-	# Combine indices, names, and sizes into a list of tuples
-	files = list(zip(np.arange(len(nearest_tiles_names)), nearest_tiles_names, nearest_tiles_sizes))
-	
-	# Create a dictionary to track the files and their original indices
-	file_dict = {}
-	for idx, name, size in files:
-		if name not in file_dict:
-			file_dict[name] = {'size': size, 'indices': [idx]}
-		else:
-			file_dict[name]['indices'].append(idx)
-
-	# Convert the dictionary back to a list of tuples (name, size, original indices)
-	file_list = [(name, data['size'], data['indices']) for name, data in file_dict.items()]
-	
-	# Sort by size in descending order
-	file_list.sort(key=lambda x: x[1], reverse=True)
-	
-	# Initialize chunks
-	chunks = []
-	current_chunk = []
-	current_chunk_size = 0
-
-	# Partition files into chunks
-	for name, size, indices in file_list:
-		if current_chunk_size + size > total_file_size:
-			# If adding the next file exceeds the limit, start a new chunk
-			chunks.append(current_chunk)
-			current_chunk = []
-			current_chunk_size = 0
-		
-		# Add file to the current chunk
-		current_chunk.append((name, size, indices))
-		current_chunk_size += size
-
-	# Add the last chunk if not empty
-	if current_chunk:
-		chunks.append(current_chunk)
-
-	return chunks
 
 
 def STRM_type_filter(combined_df, objtype: Literal['galaxy','star','qso','unsure','all'], verbose = False):
@@ -157,16 +123,126 @@ def STRM_type_filter(combined_df, objtype: Literal['galaxy','star','qso','unsure
 
 	return combined_df
 
+
+
+def fast_tile_partition2(matchable_cat,metadata_table, max_chunk_size):
+	round_ra = np.floor(matchable_cat.ra.deg) + 0.5
+	round_dec = np.floor(matchable_cat.dec.deg) + 0.5
+	all_pairs = list(product(set(round_ra), set(round_dec)))
+
+	nearest_tiles = pd.DataFrame({'ra':round_ra, 'dec':round_dec})
+
+	partitions = nearest_tiles.reset_index(drop = True).groupby(['ra','dec']).agg(
+			indices=('ra', lambda x: list(x.index))
+		).reset_index()
+
+	# Construct the filename column in partitions DataFrame
+	partitions['filename'] = partitions.apply(lambda row: f'chunk_ra_{row["ra"]}_dec_{row["dec"]}_table.h5', axis=1)
+
+	# Merge partitions with metadata_table on the filename column
+	merged_df = pd.merge(partitions, metadata_table, on='filename', how='left').sort_values('filesize_MB')
+
+	# Partition the sorted DataFrame into chunks
+	chunks = []
+	current_filenames, current_indices = [], []
+	current_chunk_size = 0
+
+	for index, row in merged_df.iterrows():
+		if current_chunk_size + row['filesize_MB'] > max_chunk_size:
+			# If adding the next file exceeds the limit, start a new chunk
+			chunks.append((current_filenames,current_chunk_size,np.array(current_indices)))
+			current_filenames, current_indices = [], []
+			current_chunk_size = 0
+
+		# Add file to the current chunk
+		current_filenames.append(row['filename'])
+		current_indices += row['indices']
+		current_chunk_size += row['filesize_MB']
+
+
+	# Add the last chunk if not empty
+	if current_filenames:
+		chunks.append((current_filenames,current_chunk_size,np.array(current_indices)))
+
+	return chunks
+
+
+def STRM_out_of_field_filter(input_cat):
+	not_matchable = np.where(input_cat.dec.deg < -32.5)
+	if len(not_matchable[0]) > 0:
+		print(f'Warning: {len(not_matchable)} out of input {len(input_cat)} coordinates ({len(not_matchable)/len(input_cat)*100}%) are outside of the Panstarrs coverage (dec < -32.5 deg)')
+		matchable_cat = input_cat[~not_matchable]
+	else:
+		matchable_cat = input_cat
+	return matchable_cat
+
+
+
+def get_metadata(match_cat_name, requested_cols):
+
+	if match_cat_name == 'STRM_base':
+		metadata_table_name = 'STRM_metadata.csv'
+		datadir = '/lustre/aoc/sciops/ddong/Catalogs/PS1_STRM/data/output_chunks/hdf5_tables/'
+		possible_cols = [
+    'objID', 'uniquePspsOBid', 'raMean', 'decMean', 'l', 'b', 'class', 'prob_Galaxy', 'prob_Star', 'prob_QSO',
+    'extrapolation_Class', 'cellDistance_Class', 'cellID_Class', 'z_phot', 'z_photErr', 'z_phot0',
+    'extrapolation_Photoz', 'cellDistance_Photoz', 'cellID_Photoz']
+
+
+	elif match_cat_name == 'STRM_WISE':
+		metadata_table_name = 'STRM_WISE_metadata.csv'
+		datadir = '/lustre/aoc/sciops/ddong/Catalogs/STRM_WISE/data/output_chunks/'
+		possible_cols = [
+    'objID', 'raMean', 'raMeanErr', 'decMean', 'decMeanErr', 'l', 'b', 'distance_Deg', 'sqrErr_Arcsec', 
+    'BayesFactor', 'cntr', 'HtmID', 'ra', 'dec', 'sigra', 'sigdec', 'sigradec', 'cc_flags', 'ext_flg', 
+    'ph_qual', 'moon_lev', 'w1mpro', 'w1sigmpro', 'w1rchi2', 'w1sat', 'w1mag', 'w1sigm', 'w1flg', 
+    'w1mag_1', 'w1sigm_1', 'w1flg_1', 'w1mag_4', 'w1sigm_4', 'w1flg_4', 'w1mag_7', 'w1sigm_7', 'w1flg_7', 
+    'w2mpro', 'w2sigmpro', 'w2rchi2', 'w2sat', 'w2mag', 'w2sigm', 'w2flg', 'w2mag_1', 'w2sigm_1', 'w2flg_1', 
+    'w2mag_4', 'w2sigm_4', 'w2flg_4', 'w2mag_7', 'w2sigm_7', 'w2flg_7', 'w3mpro', 'w3sigmpro', 'w3rchi2', 
+    'w3sat', 'w3mag', 'w3sigm', 'w3flg', 'w3mag_1', 'w3sigm_1', 'w3flg_1', 'w3mag_4', 'w3sigm_4', 'w3flg_4', 
+    'w3mag_7', 'w3sigm_7', 'w3flg_7', 'w4mpro', 'w4sigmpro', 'w4rchi2', 'w4sat', 'w4mag', 'w4sigm', 'w4flg', 
+    'w4mag_1', 'w4sigm_1', 'w4flg_1', 'w4mag_4', 'w4sigm_4', 'w4flg_4', 'w4mag_7', 'w4sigm_7', 'w4flg_7', 
+    'gFPSFMag', 'gFPSFMagErr', 'gFKronMag', 'gFKronMagErr', 'gFApMag', 'gFApMagErr', 'gFmeanMagR5', 
+    'gFmeanMagR5Err', 'gFmeanMagR6', 'gFmeanMagR6Err', 'gFmeanMagR7', 'gFmeanMagR7Err', 'gnTotal', 
+    'gnIncPSFFlux', 'gnIncKronFlux', 'gnIncApFlux', 'gnIncR5', 'gnIncR6', 'gnIncR7', 'gFlags', 'gE1', 'gE2', 
+    'rFPSFMag', 'rFPSFMagErr', 'rFKronMag', 'rFKronMagErr', 'rFApMag', 'rFApMagErr', 'rFmeanMagR5', 
+    'rFmeanMagR5Err', 'rFmeanMagR6', 'rFmeanMagR6Err', 'rFmeanMagR7', 'rFmeanMagR7Err', 'rnTotal', 
+    'rnIncPSFFlux', 'rnIncKronFlux', 'rnIncApFlux', 'rnIncR5', 'rnIncR6', 'rnIncR7', 'rFlags', 'rE1', 'rE2', 
+    'iFPSFMag', 'iFPSFMagErr', 'iFKronMag', 'iFKronMagErr', 'iFApMag', 'iFApMagErr', 'iFmeanMagR5', 
+    'iFmeanMagR5Err', 'iFmeanMagR6', 'iFmeanMagR6Err', 'iFmeanMagR7', 'iFmeanMagR7Err', 'inTotal', 
+    'inIncPSFFlux', 'inIncKronFlux', 'inIncApFlux', 'inIncR5', 'inIncR6', 'inIncR7', 'iFlags', 'iE1', 'iE2', 
+    'zFPSFMag', 'zFPSFMagErr', 'zFKronMag', 'zFKronMagErr', 'zFApMag', 'zFApMagErr', 'zFmeanMagR5', 
+    'zFmeanMagR5Err', 'zFmeanMagR6', 'zFmeanMagR6Err', 'zFmeanMagR7', 'zFmeanMagR7Err', 'znTotal', 
+    'znIncPSFFlux', 'znIncKronFlux', 'znIncApFlux', 'znIncR5', 'znIncR6', 'znIncR7', 'zFlags', 'zE1', 'zE2', 
+    'yFPSFMag', 'yFPSFMagErr', 'yFKronMag', 'yFKronMagErr', 'yFApMag', 'yFApMagErr', 'yFmeanMagR5', 
+    'yFmeanMagR5Err', 'yFmeanMagR6', 'yFmeanMagR6Err', 'yFmeanMagR7', 'yFmeanMagR7Err', 'ynTotal', 
+    'ynIncPSFFlux', 'ynIncKronFlux', 'ynIncApFlux', 'ynIncR5', 'ynIncR6', 'ynIncR7', 'yFlags', 'yE1', 'yE2', 
+    'EBV_Planck', 'EBV_PS1', 'class', 'prob_Galaxy', 'prob_Star', 'prob_QSO', 'extrapolation_Class', 
+    'cellDistance_Class', 'cellID_Class', 'z_phot', 'z_photErr', 'z_phot0', 'extrapolation_Photoz', 
+    'cellDistance_Photoz', 'cellID_Photoz']
+
+
+    # Make sure requested columns exist 
+	col_diff = set(requested_cols) - set(possible_cols) 
+	if len(col_diff) > 0:
+		raise Exception(f'Requested columns {col_diff} do not exist for catalog {match_cat_name}! Column options: {possible_cols}')
+
+	# Load metadata table
+	metadata_table = pd.read_csv(metadata_table_name)
+
+	return metadata_table, datadir
+
+
 def STRM_crossmatch(
 	input_cat: SkyCoord,
 	requested_cols: list,
+	match_cat_name = Literal['STRM_base','STRM_WISE'],
+	colorder = ['class','distance_arcsec','position_angle_deg','input_ra_deg','input_dec_deg','raMean','decMean'],
 	n_matches = 1,
 	match_radius = None,
 	max_chunk_size = 1*u.GB,
 	n_threads = 10,
 	verbose = False, 
-	datadir = '/lustre/aoc/sciops/ddong/Catalogs/PS1_STRM/data/output_chunks/hdf5_tables/',
-	metadata_table = '/lustre/aoc/sciops/ddong/Catalogs/PS1_STRM/data/STRM_metadata.csv',
 	selection_function = None,
 	**selection_function_kwargs
 	):
@@ -184,7 +260,8 @@ def STRM_crossmatch(
 			'extrapolation_Photoz','cellDistance_Photoz','cellID_Photoz']
 
 	Optional inputs:
-
+	
+	- colorder: the order you want your columns to be returned in
 	- n_matches: int (number of nearest neighbor matches to return. e.g., if n_matches = 3, this function will output the 1st, 2nd, and 3rd nearest neighbor for all points so long as they are within match_radius)
 	- match_radius: astropy Quantity object corresonding to an anglular separation, e.g. match_radius = 5*u.arcsec
 		- if match_radius is not specified, will return the closest n_matches matches regardless of separation
@@ -196,8 +273,7 @@ def STRM_crossmatch(
 		- must also input *selection_function_args for selection function
 
 	- datadir: the directory of the hdf5 files 
-	- metadata_table: file in datadir containing the filename, n_rows, filesize in MB, central RA, and central DEC of the chunks
-	- metadata_skycoord: pickle of skycoord containing the metadata points
+
 
 	Output:
 	- matched_index_list: indices (of input_coords) that were successfully matched within match_radius. If match_radius is None, returns all indices.
@@ -208,53 +284,35 @@ def STRM_crossmatch(
 	if verbose:
 		fstart = time.perf_counter()
 
-	# Load metadata table
-	metadata_table = pd.read_csv(os.path.join(datadir,metadata_table))
-	
-	# Create skycoord from metadata table
-	metadata_cat = SkyCoord(ra = np.array(metadata_table['central_ra']), dec = np.array(metadata_table['central_dec']), unit = (u.deg,u.deg))
+	# Get metadata
+	metadata_table, datadir = get_metadata(match_cat_name = match_cat_name, requested_cols = requested_cols)
 
-	# Make sure requested cols are ok
-	possible_cols = ['objID','uniquePspsOBid','raMean','decMean','l','b','class','prob_Galaxy','prob_Star','prob_QSO',\
-	'extrapolation_Class','cellDistance_Class','cellID_Class','z_phot','z_photErr','z_phot0',\
-	'extrapolation_Photoz','cellDistance_Photoz','cellID_Photoz']
+	# Exclude points out of the panstarrs coverage
+	matchable_cat = STRM_out_of_field_filter(input_cat)
 
-	col_diff = set(requested_cols) - set(possible_cols) 
-	if len(col_diff) > 0:
-		raise Exception(f'\n\nRequested columns {col_diff} do not exist in STRM!\n\nColumn options: {possible_cols}')
+	# Partition matchable points into chunks of size < max_chunk_size
+	partition_start = time.perf_counter()
+	chunks = fast_tile_partition2(matchable_cat,metadata_table, max_chunk_size.to(u.MB).value)
+	partition_end = time.perf_counter()
 
-	# Identify relevant tiles for matchable points, excluding points outside of Panstarrs coverage
-	
-	not_matchable = np.where(input_cat.dec.deg < -32.5)
-	if len(not_matchable[0]) > 0:
-		print(f'Warning: {len(not_matchable)} out of input {len(input_cat)} coordinates ({len(not_matchable)/len(input_cat)*100}%) are outside of the Panstarrs coverage (dec < -32.5 deg)')
-		matchable_cat = input_cat[~not_matchable]
-	else:
-		matchable_cat = input_cat
-	
-	nearest_tiles_index, d2d, _ = matchable_cat.match_to_catalog_sky(metadata_cat)
-	nearest_tiles_names = metadata_table.iloc[nearest_tiles_index].filename
-	nearest_tiles_sizes = metadata_table.iloc[nearest_tiles_index].filesize_MB
-	chunks = partition_files(nearest_tiles_names, nearest_tiles_sizes, max_chunk_size.to(u.MB).value)
-	
 	if verbose:
-		print(f'Partitioned {len(set(nearest_tiles_index)):,} nearest tiles to the {len(matchable_cat)} matchable input coordinates into {len(chunks)} chunks of size < {max_chunk_size} in {(time.perf_counter()-fstart):.2f} seconds')
+		print(f'Partitioned {len(matchable_cat)} points in to {len(chunks)} chunks of size < {max_chunk_size}')
 
+	# Crossmatch each chunk
 	for i, chunk in enumerate(chunks):
-		if verbose:
-			loop_start = time.perf_counter()
+		loop_start = time.perf_counter()
+		# Parse chunks
+		filenames, size, input_indices = chunk
+		filepaths = [os.path.join(datadir,x) for x in filenames]
 
-		filenames, sizes, input_indices = [list(x) for x in zip(*chunk)]
-		input_indices = np.array(list(itertools.chain.from_iterable(input_indices))) #Flattening the list of lists takes a surprising amount of time. In the test case it was 8.1s using sum compared to 2.4s for itertools.chain
 		input_match_cat = matchable_cat[input_indices]
 
 		if verbose:
 			print('----------------------------------------------------------------------------------------------------------------------------------------------')
-			print(f'\nProcessing chunk {i+1}/{len(chunks)} of size {sum(sizes):.1f} MB containing {len(filenames)} files and {len(input_match_cat)} points to match')
+			print(f'\nProcessing chunk {i+1}/{len(chunks)} of size {size:.2f} MB containing {len(filenames)} files and {len(input_match_cat)} points to match')
 
 		match_tables = read_hdf5_list(
-			filenames = filenames,
-			datadir = datadir,
+			filenames = filepaths,
 			requested_cols = requested_cols,
 			input_match_cat = input_match_cat,
 			match_radius = match_radius,
@@ -276,42 +334,45 @@ def STRM_crossmatch(
 		else:
 			matched_tab_list = [pd.concat([matched_tab_list[i], match_tables[i]]) for i in range(n_matches)]
 
-		if verbose:
-			fend = time.perf_counter()
-			print(f'Total runtime: {(fend-fstart):.2f} seconds')
+	sorted_tab_list = [sort_col_order(tab, desired_order = colorder) for tab in matched_tab_list]
 
-	return matched_tab_list
+	if verbose:
+		fend = time.perf_counter()
+		print(f'------> Total crossmatch runtime: {(fend-fstart):.2f} seconds')
+		print(f'------> Runtime per chunk: {(fend-fstart)/len(chunks):.2f} seconds')
+
+
+	return sorted_tab_list
 
 
 
 if __name__ == '__main__':
 	
 	#Test
-	nrand = 10_000_000
+	for nrand in [10_000_000]:
+		rand_ra_start = 20.0
+		rand_dec_start = -15.0
 
-	rand_ra_start = 20.0
-	rand_dec_start = 15.0
+		rand_ra_end = rand_ra_start + 20
+		rand_dec_end = rand_dec_start + 20
 
-	rand_ra_end = rand_ra_start + 5
-	rand_dec_end = rand_dec_start + 5
+		n_matches = 5
+		match_radius = 1*u.arcsec
+		verbose = True
+		max_chunk_size = 15*u.MB
 
-	n_matches = 5
-	match_radius = 1*u.arcsec
-	verbose = True
+		print('\n------------------------  Test  ------------------------')
+		print(f'\nGenerating input skycoord of length n = {nrand:,} for:')
+		print(f'Random RAs between {rand_ra_start} and {rand_ra_end} deg')
+		print(f'Random DECs between {rand_dec_start} and {rand_dec_end} deg\n')
 
-	print('\n------------------------  Test  ------------------------')
-	print(f'\nGenerating input skycoord of length n = {nrand:,} for:')
-	print(f'Random RAs between {rand_ra_start} - {rand_ra_end}')
-	print(f'Random DECs between {rand_dec_start} - {rand_dec_end}\n')
+		rand_ra = np.random.uniform(rand_ra_start,rand_ra_end,nrand)
+		rand_dec = np.random.uniform(rand_dec_start,rand_dec_end,nrand)
+		rand_coords = SkyCoord(ra = rand_ra, dec = rand_dec, unit = (u.deg,u.deg))
 
-	rand_ra = np.random.uniform(rand_ra_start,rand_ra_end,nrand)
-	rand_dec = np.random.uniform(rand_dec_start,rand_dec_end,nrand)
-	rand_coords = SkyCoord(ra = rand_ra, dec = rand_dec, unit = (u.deg,u.deg))
+		print('Doing crossmatch')
+		run_start = time.time()
+		out = STRM_crossmatch(rand_coords, match_cat_name = 'STRM_base', max_chunk_size = max_chunk_size, verbose = verbose, match_radius = match_radius, n_matches = n_matches, requested_cols = ['objID','z_phot','z_photErr','z_phot0'], selection_function = STRM_type_filter, objtype = 'galaxy')
+		run_end = time.time()
 
-	print('Doing crossmatch')
-	run_start = time.time()
-	out = STRM_crossmatch(rand_coords, verbose = verbose, match_radius = match_radius, n_matches = n_matches, requested_cols = ['objID','z_phot','z_photErr','z_phot0'], selection_function = STRM_type_filter, objtype = 'galaxy')
-	run_end = time.time()
 	
-	
-

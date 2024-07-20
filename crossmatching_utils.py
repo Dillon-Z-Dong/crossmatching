@@ -40,7 +40,7 @@ def sort_col_order(tab: pd.DataFrame, desired_order = ['input_ra_deg', 'input_de
 	'''
 
 	remaining_columns = [col for col in tab.columns if col not in desired_order]
-	new_order = desired_order + remaining_columns
+	new_order = [x for x in desired_order + remaining_columns if x in tab.keys()]
 	tab = tab.reindex(columns=new_order)
 
 	return tab
@@ -106,7 +106,7 @@ def crossmatch_skycoords(input_cat: SkyCoord, match_tab: pd.DataFrame, \
 	if verbose:
 		kwargs_str = ', '.join(f'{k} = {v}' for k, v in match_function_kwargs.items())
 		print('----------------------')
-		print(f'Running crossmatch_skycoord with with match function {match_function.__name__}, kwargs {kwargs_str}, and {hierarchical_optimization = }')
+		print(f'Running crossmatch_skycoord with with match function {match_function.__name__}, kwargs {kwargs_str}, n_matches {n_matches}, and {hierarchical_optimization = }')
 		print('----------------------')
 
 	for k in range(1,n_matches+1):
