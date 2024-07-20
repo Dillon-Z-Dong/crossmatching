@@ -12,6 +12,8 @@ import itertools
 from concurrent.futures import ThreadPoolExecutor
 import time
 
+from crossmatching_utils import crossmatch_skycoords, const_or_variable_radius_match_function
+
 '''
 Functions for batch crossmatching against the neural net source classifications in the PS1-STRM catalog
 
@@ -58,46 +60,23 @@ def read_hdf5_list(filenames, datadir, requested_cols, input_match_cat, match_ra
 
 	if verbose:
 		print(f'Data read + catalog creation time: {(strm_cat_end - strm_cat_start):.2f} seconds')
-
-	#Cross match
-	if n_matches > 1:
-		skdt = 'tree'
-	else:
-		skdt = False
-
-	original_indices = np.arange(len(input_match_cat))
-	latest_matched_indices = np.arange(len(input_match_cat))
-	for k in range(1,n_matches+1):
 		match_start = time.perf_counter()
 
-		#if k == 1 or n_matches == 1:
-		#	idx,d2d, _ = match_coordinates_sky(input_match_cat,strm_match_cat,nthneighbor=k)#, storekdtree = skdt) 
-		#else:
-		match_cat_k = input_match_cat[latest_matched_indices]
+	match_tables = crossmatch_skycoords(
+		input_cat = input_match_cat, 
+		match_cat = strm_match_cat, 
+		match_tab = combined_df, 
+		n_matches = n_matches,
+		hierarchical_optimization = True,
+		match_function = const_or_variable_radius_match_function,
+		match_radius = match_radius
+		)
 
-		if verbose:
-			print(f'Cross matching {len(match_cat_k)} input points for k = {k}, match_radius = {match_radius}')
+	if verbose:
+		match_end = time.perf_counter()
+		print(f'Matched catalogs in {(match_end - match_start):.4f} seconds')
 
-		idx,d2d,_ = match_coordinates_sky(match_cat_k,strm_match_cat,nthneighbor=k)#, storekdtree = skdt) 
-
-		if match_radius is not None:
-			matches = np.where(d2d < match_radius)
-			latest_matched_indices = latest_matched_indices[matches] #Only need to cross match those that had >0 matches in the previous round
-
-			match_indices.append(original_indices[latest_matched_indices]) #latest_matched_indices was updated to reflect the latest round in the previous line
-			match_distances.append(d2d[matches].arcsec)
-			print(f'len idx = {len(idx)}')
-			print(f'len combined_df: {len(combined_df)}')
-			match_tables.append(combined_df.iloc[idx[matches]])
-
-			if verbose:
-				print(f'Found {len(matches[0])} matches ({(100*len(matches[0])/len(input_match_cat)):.4f}% of input catalog) in {(time.perf_counter()-match_start):.4f} seconds\n')
-		else:
-			match_indices.append(original_indices)
-			match_distances.append(d2d.arcsec)
-			match_tables.append(combined_df.iloc[idx])
-
-	return match_indices, match_distances, match_tables #indices, distances in arcsec, and STRM tables of successful matches
+	return match_tables
 
 
 def partition_files(nearest_tiles_names, nearest_tiles_sizes, total_file_size):
@@ -259,9 +238,7 @@ def STRM_crossmatch(
 	if verbose:
 		print(f'Partitioned {len(set(nearest_tiles_index))} nearest tiles to the {len(matchable_cat)} matchable input coordinates into {len(chunks)} chunks of size < {max_chunk_size} in {(time.perf_counter()-fstart):.2f} seconds')
 
-	# Initialize lists that will store the final results
-	matched_index_list = [np.array([], dtype = 'object') for _ in range(n_matches)]
-	matched_distance_list = [np.array([], dtype = 'object') for _ in range(n_matches)]
+	# Initialize list that will store the final results
 	all_cols = list(set(requested_cols + ['raMean','decMean','class']))
 	matched_tab_list = [pd.DataFrame(columns=all_cols) for _ in range(n_matches)]
 
@@ -277,7 +254,7 @@ def STRM_crossmatch(
 			print('----------------------------------------------------------------------------------------------------------------------------------------------')
 			print(f'\nProcessing chunk {i+1}/{len(chunks)} of size {sum(sizes):.1f} MB containing {len(filenames)} files and {len(input_match_cat)} points to match')
 		
-		match_indices, match_distances, match_tables = read_hdf5_list(
+		match_tables = read_hdf5_list(
 			filenames = filenames,
 			datadir = datadir,
 			requested_cols = requested_cols,
@@ -296,18 +273,13 @@ def STRM_crossmatch(
 			print('----------------------------------------------------------------------------------------------------------------------------------------------')
 		
 		#Concatenate results
-		matched_index_list = [np.concatenate([matched_index_list[i],input_indices[match_indices[i]]]) for i in range(n_matches)]
-		matched_distance_list = [np.concatenate([matched_distance_list[i],match_distances[i]]) for i in range(n_matches)]
 		matched_tab_list = [pd.concat([matched_tab_list[i], match_tables[i]]) for i in range(n_matches)]
-
-		#Convert np array types
-		matched_index_list = [x.astype('int') for x in matched_index_list]
-		matched_distance_list = [x.astype('int') for x in matched_distance_list]
 
 		if verbose:
 			fend = time.perf_counter()
 			print(f'Total runtime: {(fend-fstart):.2f} seconds')
-	return matched_index_list, matched_distance_list, matched_tab_list
+
+	return matched_tab_list
 
 
 
