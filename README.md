@@ -1,5 +1,5 @@
 # crossmatching
-Python crossmatching tools designed for automated workflows and large datasets. 
+Python crossmatching tools designed for automated workflows and large datasets in astronomy. 
 
 Current catalogs:
 
