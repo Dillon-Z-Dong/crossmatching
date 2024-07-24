@@ -136,8 +136,14 @@ def fast_tile_partition2(matchable_cat,metadata_table, max_chunk_size):
 			indices=('ra', lambda x: list(x.index))
 		).reset_index()
 
+	# Hacky way to determine the naming convention
+	if metadata_table.loc[0,'filename'].endswith('_table.h5'):
+		suffix = '_table.h5'
+	elif metadata_table.loc[0,'filename'].endswith('.h5'):
+		suffix = '.h5'
+
 	# Construct the filename column in partitions DataFrame
-	partitions['filename'] = partitions.apply(lambda row: f'chunk_ra_{row["ra"]}_dec_{row["dec"]}_table.h5', axis=1)
+	partitions['filename'] = partitions.apply(lambda row: f'chunk_ra_{row["ra"]}_dec_{row["dec"]}{suffix}', axis=1)
 
 	# Merge partitions with metadata_table on the filename column
 	merged_df = pd.merge(partitions, metadata_table, on='filename', how='left').sort_values('filesize_MB')
@@ -353,13 +359,13 @@ if __name__ == '__main__':
 		rand_ra_start = 20.0
 		rand_dec_start = -15.0
 
-		rand_ra_end = rand_ra_start + 20
-		rand_dec_end = rand_dec_start + 20
+		rand_ra_end = rand_ra_start + 5
+		rand_dec_end = rand_dec_start + 5
 
 		n_matches = 5
 		match_radius = 1*u.arcsec
 		verbose = True
-		max_chunk_size = 15*u.MB
+		max_chunk_size = 1*u.GB
 
 		print('\n------------------------  Test  ------------------------')
 		print(f'\nGenerating input skycoord of length n = {nrand:,} for:')
@@ -372,7 +378,10 @@ if __name__ == '__main__':
 
 		print('Doing crossmatch')
 		run_start = time.time()
-		out = STRM_crossmatch(rand_coords, match_cat_name = 'STRM_base', max_chunk_size = max_chunk_size, verbose = verbose, match_radius = match_radius, n_matches = n_matches, requested_cols = ['objID','z_phot','z_photErr','z_phot0'], selection_function = STRM_type_filter, objtype = 'galaxy')
+		out = STRM_crossmatch(rand_coords, match_cat_name = 'STRM_WISE', max_chunk_size = max_chunk_size, verbose = verbose, match_radius = match_radius, n_matches = n_matches, requested_cols = ['objID','z_phot','z_photErr','z_phot0'], selection_function = STRM_type_filter, objtype = 'galaxy')
 		run_end = time.time()
 
+		'''
+		match_cat_name can be STRM_base or STRM_WISE
+		'''
 	
