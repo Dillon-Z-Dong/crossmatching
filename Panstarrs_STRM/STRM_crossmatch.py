@@ -174,10 +174,10 @@ def fast_tile_partition2(matchable_cat,metadata_table, max_chunk_size):
 
 
 def STRM_out_of_field_filter(input_cat):
-	not_matchable = np.where(input_cat.dec.deg < -32.5)
-	if len(not_matchable[0]) > 0:
+	not_matchable = np.where(input_cat.dec.deg < -32.5)[0]  # Extract the indices
+	if len(not_matchable) > 0:
 		print(f'Warning: {len(not_matchable)} out of input {len(input_cat)} coordinates ({len(not_matchable)/len(input_cat)*100}%) are outside of the Panstarrs coverage (dec < -32.5 deg)')
-		matchable_cat = input_cat[~not_matchable]
+		matchable_cat = input_cat[~np.isin(range(len(input_cat)), not_matchable)]
 	else:
 		matchable_cat = input_cat
 	return matchable_cat
