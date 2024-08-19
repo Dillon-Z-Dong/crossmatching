@@ -355,6 +355,7 @@ def STRM_crossmatch(
 if __name__ == '__main__':
 	
 	#Test
+
 	for nrand in [10_000_000]:
 		rand_ra_start = 20.0
 		rand_dec_start = -15.0
@@ -376,12 +377,8 @@ if __name__ == '__main__':
 		rand_dec = np.random.uniform(rand_dec_start,rand_dec_end,nrand)
 		rand_coords = SkyCoord(ra = rand_ra, dec = rand_dec, unit = (u.deg,u.deg))
 
-		print('Doing crossmatch')
-		run_start = time.time()
-		out = STRM_crossmatch(rand_coords, match_cat_name = 'STRM_WISE', max_chunk_size = max_chunk_size, verbose = verbose, match_radius = match_radius, n_matches = n_matches, requested_cols = ['objID','z_phot','z_photErr','z_phot0'], selection_function = STRM_type_filter, objtype = 'galaxy')
-		run_end = time.time()
 
-		'''
-		match_cat_name can be STRM_base or STRM_WISE
-		'''
+	'''
+	match_cat_name can be STRM_base or STRM_WISE
+	'''
 	
