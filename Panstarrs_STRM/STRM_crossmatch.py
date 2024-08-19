@@ -356,27 +356,35 @@ if __name__ == '__main__':
 	
 	#Test
 
-	for nrand in [10_000_000]:
-		rand_ra_start = 20.0
-		rand_dec_start = -15.0
+	nrand = 10_000_000
+	rand_ra_start = 20.0
+	rand_dec_start = -15.0
 
-		rand_ra_end = rand_ra_start + 5
-		rand_dec_end = rand_dec_start + 5
+	rand_ra_end = rand_ra_start + 5
+	rand_dec_end = rand_dec_start + 5
 
-		n_matches = 5
-		match_radius = 1*u.arcsec
-		verbose = True
-		max_chunk_size = 1*u.GB
+	n_matches = 5
+	match_radius = 1*u.arcsec
+	verbose = True
+	max_chunk_size = 1*u.GB
 
-		print('\n------------------------  Test  ------------------------')
-		print(f'\nGenerating input skycoord of length n = {nrand:,} for:')
-		print(f'Random RAs between {rand_ra_start} and {rand_ra_end} deg')
-		print(f'Random DECs between {rand_dec_start} and {rand_dec_end} deg\n')
+	print('\n------------------------  Test  ------------------------')
+	print(f'\nGenerating input skycoord of length n = {nrand:,} for:')
+	print(f'Random RAs between {rand_ra_start} and {rand_ra_end} deg')
+	print(f'Random DECs between {rand_dec_start} and {rand_dec_end} deg\n')
 
-		rand_ra = np.random.uniform(rand_ra_start,rand_ra_end,nrand)
-		rand_dec = np.random.uniform(rand_dec_start,rand_dec_end,nrand)
-		rand_coords = SkyCoord(ra = rand_ra, dec = rand_dec, unit = (u.deg,u.deg))
+	rand_ra = np.random.uniform(rand_ra_start,rand_ra_end,nrand)
+	rand_dec = np.random.uniform(rand_dec_start,rand_dec_end,nrand)
+	rand_coords = SkyCoord(ra = rand_ra, dec = rand_dec, unit = (u.deg,u.deg))
+	
 
+	print('Doing crossmatch')
+	run_start = time.time()
+	out = STRM_crossmatch(rand_coords, match_cat_name = 'STRM_base', verbose = True, match_radius = match_radius, n_matches = n_matches, requested_cols = ['objID','class','z_phot','z_photErr','z_phot0'])#, selection_function = STRM_type_filter, objtype = 'galaxy')
+	run_end = time.time()
+
+	nearest_match = out[0]
+	print(Counter(nearest_match['class']))
 
 	'''
 	match_cat_name can be STRM_base or STRM_WISE
