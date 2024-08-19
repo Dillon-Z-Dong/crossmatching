@@ -30,9 +30,15 @@ See Beck et al. 2021 (https://academic.oup.com/mnras/article/500/2/1633/5899759)
 '''
 
 
-def read_hdf5(file, requested_cols, required_cols = ['raMean', 'decMean','class']):
-	columns_to_read = list(set(requested_cols + required_cols))
-	return pd.read_hdf(file, key='data', columns=columns_to_read)  
+def read_hdf5(file, requested_cols):
+    try:
+        return pd.read_hdf(file, key='data', columns=requested_cols)
+    except FileNotFoundError:
+        print(f"File not found: {file}")
+        return None
+    except Exception as e:
+        print(f"Error reading file {file}: {str(e)}")
+        return None
 
 
 
@@ -125,52 +131,59 @@ def STRM_type_filter(combined_df, objtype: Literal['galaxy','star','qso','unsure
 
 
 
-def fast_tile_partition2(matchable_cat,metadata_table, max_chunk_size):
-	round_ra = np.floor(matchable_cat.ra.deg) + 0.5
-	round_dec = np.floor(matchable_cat.dec.deg) + 0.5
-	all_pairs = list(product(set(round_ra), set(round_dec)))
+def fast_tile_partition2(matchable_cat, metadata_table, max_chunk_size):
+    round_ra = np.floor(matchable_cat.ra.deg) + 0.5
+    round_dec = np.floor(matchable_cat.dec.deg) + 0.5
+    all_pairs = set(zip(round_ra, round_dec))
 
-	nearest_tiles = pd.DataFrame({'ra':round_ra, 'dec':round_dec})
+    # Create a set of existing file coordinates from metadata_table
+    existing_files = set(zip(metadata_table['central_ra'], metadata_table['central_dec']))
 
-	partitions = nearest_tiles.reset_index(drop = True).groupby(['ra','dec']).agg(
-			indices=('ra', lambda x: list(x.index))
-		).reset_index()
+    # Take the intersection to get only the coordinates for which files exist
+    valid_pairs = all_pairs.intersection(existing_files)
 
-	# Hacky way to determine the naming convention
-	if metadata_table.loc[0,'filename'].endswith('_table.h5'):
-		suffix = '_table.h5'
-	elif metadata_table.loc[0,'filename'].endswith('.h5'):
-		suffix = '.h5'
+    nearest_tiles = pd.DataFrame({'ra': [ra for ra, _ in valid_pairs], 
+                                  'dec': [dec for _, dec in valid_pairs]})
 
-	# Construct the filename column in partitions DataFrame
-	partitions['filename'] = partitions.apply(lambda row: f'chunk_ra_{row["ra"]}_dec_{row["dec"]}{suffix}', axis=1)
+    partitions = nearest_tiles.reset_index(drop=True).groupby(['ra', 'dec']).agg(
+        indices=('ra', lambda x: list(x.index))
+    ).reset_index()
 
-	# Merge partitions with metadata_table on the filename column
-	merged_df = pd.merge(partitions, metadata_table, on='filename', how='left').sort_values('filesize_MB')
+    # Determine the naming convention
+    if metadata_table.loc[0, 'filename'].endswith('_table.h5'):
+        suffix = '_table.h5'
+    elif metadata_table.loc[0, 'filename'].endswith('.h5'):
+        suffix = '.h5'
 
-	# Partition the sorted DataFrame into chunks
-	chunks = []
-	current_filenames, current_indices = [], []
-	current_chunk_size = 0
+    # Construct the filename column in partitions DataFrame
+    partitions['filename'] = partitions.apply(lambda row: f'chunk_ra_{row["ra"]}_dec_{row["dec"]}{suffix}', axis=1)
 
-	for index, row in merged_df.iterrows():
-		if current_chunk_size + row['filesize_MB'] > max_chunk_size:
-			# If adding the next file exceeds the limit, start a new chunk
-			chunks.append((current_filenames,current_chunk_size,np.array(current_indices)))
-			current_filenames, current_indices = [], []
-			current_chunk_size = 0
+    # Merge partitions with metadata_table on the filename column
+    merged_df = pd.merge(partitions, metadata_table, on='filename', how='left').sort_values('filesize_MB')
 
-		# Add file to the current chunk
-		current_filenames.append(row['filename'])
-		current_indices += row['indices']
-		current_chunk_size += row['filesize_MB']
+    # Partition the sorted DataFrame into chunks
+    chunks = []
+    current_filenames, current_indices = [], []
+    current_chunk_size = 0
 
+    for index, row in merged_df.iterrows():
+        if current_chunk_size + row['filesize_MB'] > max_chunk_size:
+            # If adding the next file exceeds the limit, start a new chunk
+            if current_filenames:
+                chunks.append((current_filenames, current_chunk_size, np.array(current_indices)))
+            current_filenames, current_indices = [], []
+            current_chunk_size = 0
 
-	# Add the last chunk if not empty
-	if current_filenames:
-		chunks.append((current_filenames,current_chunk_size,np.array(current_indices)))
+        # Add file to the current chunk
+        current_filenames.append(row['filename'])
+        current_indices += row['indices']
+        current_chunk_size += row['filesize_MB']
 
-	return chunks
+    # Add the last chunk if not empty
+    if current_filenames:
+        chunks.append((current_filenames, current_chunk_size, np.array(current_indices)))
+
+    return chunks
 
 
 def STRM_out_of_field_filter(input_cat):
@@ -328,6 +341,10 @@ def STRM_crossmatch(
 			selection_function = selection_function,
 			**selection_function_kwargs
 			)
+
+		if match_tables is None:
+		    print("No data could be read. Skipping this chunk.")
+		    continue  
 
 		if verbose:
 			loop_end = time.perf_counter()
