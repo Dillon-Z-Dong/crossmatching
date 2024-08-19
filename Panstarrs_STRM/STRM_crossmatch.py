@@ -30,15 +30,16 @@ See Beck et al. 2021 (https://academic.oup.com/mnras/article/500/2/1633/5899759)
 '''
 
 
-def read_hdf5(file, requested_cols):
-    try:
-        return pd.read_hdf(file, key='data', columns=requested_cols)
-    except FileNotFoundError:
-        print(f"File not found: {file}")
-        return None
-    except Exception as e:
-        print(f"Error reading file {file}: {str(e)}")
-        return None
+def read_hdf5(file, requested_cols, required_cols=['raMean', 'decMean', 'class']):
+	columns_to_read = list(set(requested_cols + required_cols))
+	try:
+		return pd.read_hdf(file, key='data', columns=columns_to_read)
+	except FileNotFoundError:
+		print(f"File not found: {file}")
+		return None
+	except Exception as e:
+		print(f"Error reading file {file}: {str(e)}")
+		return None
 
 
 
@@ -132,58 +133,58 @@ def STRM_type_filter(combined_df, objtype: Literal['galaxy','star','qso','unsure
 
 
 def fast_tile_partition2(matchable_cat, metadata_table, max_chunk_size):
-    round_ra = np.floor(matchable_cat.ra.deg) + 0.5
-    round_dec = np.floor(matchable_cat.dec.deg) + 0.5
-    all_pairs = set(zip(round_ra, round_dec))
+	round_ra = np.floor(matchable_cat.ra.deg) + 0.5
+	round_dec = np.floor(matchable_cat.dec.deg) + 0.5
+	all_pairs = set(zip(round_ra, round_dec))
 
-    # Create a set of existing file coordinates from metadata_table
-    existing_files = set(zip(metadata_table['central_ra'], metadata_table['central_dec']))
+	# Create a set of existing file coordinates from metadata_table
+	existing_files = set(zip(metadata_table['central_ra'], metadata_table['central_dec']))
 
-    # Take the intersection to get only the coordinates for which files exist
-    valid_pairs = all_pairs.intersection(existing_files)
+	# Take the intersection to get only the coordinates for which files exist
+	valid_pairs = all_pairs.intersection(existing_files)
 
-    nearest_tiles = pd.DataFrame({'ra': [ra for ra, _ in valid_pairs], 
-                                  'dec': [dec for _, dec in valid_pairs]})
+	nearest_tiles = pd.DataFrame({'ra': [ra for ra, _ in valid_pairs], 
+								  'dec': [dec for _, dec in valid_pairs]})
 
-    partitions = nearest_tiles.reset_index(drop=True).groupby(['ra', 'dec']).agg(
-        indices=('ra', lambda x: list(x.index))
-    ).reset_index()
+	partitions = nearest_tiles.reset_index(drop=True).groupby(['ra', 'dec']).agg(
+		indices=('ra', lambda x: list(x.index))
+	).reset_index()
 
-    # Determine the naming convention
-    if metadata_table.loc[0, 'filename'].endswith('_table.h5'):
-        suffix = '_table.h5'
-    elif metadata_table.loc[0, 'filename'].endswith('.h5'):
-        suffix = '.h5'
+	# Determine the naming convention
+	if metadata_table.loc[0, 'filename'].endswith('_table.h5'):
+		suffix = '_table.h5'
+	elif metadata_table.loc[0, 'filename'].endswith('.h5'):
+		suffix = '.h5'
 
-    # Construct the filename column in partitions DataFrame
-    partitions['filename'] = partitions.apply(lambda row: f'chunk_ra_{row["ra"]}_dec_{row["dec"]}{suffix}', axis=1)
+	# Construct the filename column in partitions DataFrame
+	partitions['filename'] = partitions.apply(lambda row: f'chunk_ra_{row["ra"]}_dec_{row["dec"]}{suffix}', axis=1)
 
-    # Merge partitions with metadata_table on the filename column
-    merged_df = pd.merge(partitions, metadata_table, on='filename', how='left').sort_values('filesize_MB')
+	# Merge partitions with metadata_table on the filename column
+	merged_df = pd.merge(partitions, metadata_table, on='filename', how='left').sort_values('filesize_MB')
 
-    # Partition the sorted DataFrame into chunks
-    chunks = []
-    current_filenames, current_indices = [], []
-    current_chunk_size = 0
+	# Partition the sorted DataFrame into chunks
+	chunks = []
+	current_filenames, current_indices = [], []
+	current_chunk_size = 0
 
-    for index, row in merged_df.iterrows():
-        if current_chunk_size + row['filesize_MB'] > max_chunk_size:
-            # If adding the next file exceeds the limit, start a new chunk
-            if current_filenames:
-                chunks.append((current_filenames, current_chunk_size, np.array(current_indices)))
-            current_filenames, current_indices = [], []
-            current_chunk_size = 0
+	for index, row in merged_df.iterrows():
+		if current_chunk_size + row['filesize_MB'] > max_chunk_size:
+			# If adding the next file exceeds the limit, start a new chunk
+			if current_filenames:
+				chunks.append((current_filenames, current_chunk_size, np.array(current_indices)))
+			current_filenames, current_indices = [], []
+			current_chunk_size = 0
 
-        # Add file to the current chunk
-        current_filenames.append(row['filename'])
-        current_indices += row['indices']
-        current_chunk_size += row['filesize_MB']
+		# Add file to the current chunk
+		current_filenames.append(row['filename'])
+		current_indices += row['indices']
+		current_chunk_size += row['filesize_MB']
 
-    # Add the last chunk if not empty
-    if current_filenames:
-        chunks.append((current_filenames, current_chunk_size, np.array(current_indices)))
+	# Add the last chunk if not empty
+	if current_filenames:
+		chunks.append((current_filenames, current_chunk_size, np.array(current_indices)))
 
-    return chunks
+	return chunks
 
 
 def STRM_out_of_field_filter(input_cat):
@@ -203,45 +204,45 @@ def get_metadata(match_cat_name, requested_cols, metadata_dir = '/export/home/ra
 		metadata_table_name = os.path.join(metadata_dir,'STRM_base_metadata.csv')
 		datadir = '/lustre/aoc/sciops/ddong/Catalogs/PS1_STRM/data/output_chunks/hdf5_tables/'
 		possible_cols = [
-    'objID', 'uniquePspsOBid', 'raMean', 'decMean', 'l', 'b', 'class', 'prob_Galaxy', 'prob_Star', 'prob_QSO',
-    'extrapolation_Class', 'cellDistance_Class', 'cellID_Class', 'z_phot', 'z_photErr', 'z_phot0',
-    'extrapolation_Photoz', 'cellDistance_Photoz', 'cellID_Photoz']
+	'objID', 'uniquePspsOBid', 'raMean', 'decMean', 'l', 'b', 'class', 'prob_Galaxy', 'prob_Star', 'prob_QSO',
+	'extrapolation_Class', 'cellDistance_Class', 'cellID_Class', 'z_phot', 'z_photErr', 'z_phot0',
+	'extrapolation_Photoz', 'cellDistance_Photoz', 'cellID_Photoz']
 
 
 	elif match_cat_name == 'STRM_WISE':
 		metadata_table_name = os.path.join(metadata_dir,'STRM_WISE_metadata.csv')
 		datadir = '/lustre/aoc/sciops/ddong/Catalogs/STRM_WISE/data/output_chunks/'
 		possible_cols = [
-    'objID', 'raMean', 'raMeanErr', 'decMean', 'decMeanErr', 'l', 'b', 'distance_Deg', 'sqrErr_Arcsec', 
-    'BayesFactor', 'cntr', 'HtmID', 'ra', 'dec', 'sigra', 'sigdec', 'sigradec', 'cc_flags', 'ext_flg', 
-    'ph_qual', 'moon_lev', 'w1mpro', 'w1sigmpro', 'w1rchi2', 'w1sat', 'w1mag', 'w1sigm', 'w1flg', 
-    'w1mag_1', 'w1sigm_1', 'w1flg_1', 'w1mag_4', 'w1sigm_4', 'w1flg_4', 'w1mag_7', 'w1sigm_7', 'w1flg_7', 
-    'w2mpro', 'w2sigmpro', 'w2rchi2', 'w2sat', 'w2mag', 'w2sigm', 'w2flg', 'w2mag_1', 'w2sigm_1', 'w2flg_1', 
-    'w2mag_4', 'w2sigm_4', 'w2flg_4', 'w2mag_7', 'w2sigm_7', 'w2flg_7', 'w3mpro', 'w3sigmpro', 'w3rchi2', 
-    'w3sat', 'w3mag', 'w3sigm', 'w3flg', 'w3mag_1', 'w3sigm_1', 'w3flg_1', 'w3mag_4', 'w3sigm_4', 'w3flg_4', 
-    'w3mag_7', 'w3sigm_7', 'w3flg_7', 'w4mpro', 'w4sigmpro', 'w4rchi2', 'w4sat', 'w4mag', 'w4sigm', 'w4flg', 
-    'w4mag_1', 'w4sigm_1', 'w4flg_1', 'w4mag_4', 'w4sigm_4', 'w4flg_4', 'w4mag_7', 'w4sigm_7', 'w4flg_7', 
-    'gFPSFMag', 'gFPSFMagErr', 'gFKronMag', 'gFKronMagErr', 'gFApMag', 'gFApMagErr', 'gFmeanMagR5', 
-    'gFmeanMagR5Err', 'gFmeanMagR6', 'gFmeanMagR6Err', 'gFmeanMagR7', 'gFmeanMagR7Err', 'gnTotal', 
-    'gnIncPSFFlux', 'gnIncKronFlux', 'gnIncApFlux', 'gnIncR5', 'gnIncR6', 'gnIncR7', 'gFlags', 'gE1', 'gE2', 
-    'rFPSFMag', 'rFPSFMagErr', 'rFKronMag', 'rFKronMagErr', 'rFApMag', 'rFApMagErr', 'rFmeanMagR5', 
-    'rFmeanMagR5Err', 'rFmeanMagR6', 'rFmeanMagR6Err', 'rFmeanMagR7', 'rFmeanMagR7Err', 'rnTotal', 
-    'rnIncPSFFlux', 'rnIncKronFlux', 'rnIncApFlux', 'rnIncR5', 'rnIncR6', 'rnIncR7', 'rFlags', 'rE1', 'rE2', 
-    'iFPSFMag', 'iFPSFMagErr', 'iFKronMag', 'iFKronMagErr', 'iFApMag', 'iFApMagErr', 'iFmeanMagR5', 
-    'iFmeanMagR5Err', 'iFmeanMagR6', 'iFmeanMagR6Err', 'iFmeanMagR7', 'iFmeanMagR7Err', 'inTotal', 
-    'inIncPSFFlux', 'inIncKronFlux', 'inIncApFlux', 'inIncR5', 'inIncR6', 'inIncR7', 'iFlags', 'iE1', 'iE2', 
-    'zFPSFMag', 'zFPSFMagErr', 'zFKronMag', 'zFKronMagErr', 'zFApMag', 'zFApMagErr', 'zFmeanMagR5', 
-    'zFmeanMagR5Err', 'zFmeanMagR6', 'zFmeanMagR6Err', 'zFmeanMagR7', 'zFmeanMagR7Err', 'znTotal', 
-    'znIncPSFFlux', 'znIncKronFlux', 'znIncApFlux', 'znIncR5', 'znIncR6', 'znIncR7', 'zFlags', 'zE1', 'zE2', 
-    'yFPSFMag', 'yFPSFMagErr', 'yFKronMag', 'yFKronMagErr', 'yFApMag', 'yFApMagErr', 'yFmeanMagR5', 
-    'yFmeanMagR5Err', 'yFmeanMagR6', 'yFmeanMagR6Err', 'yFmeanMagR7', 'yFmeanMagR7Err', 'ynTotal', 
-    'ynIncPSFFlux', 'ynIncKronFlux', 'ynIncApFlux', 'ynIncR5', 'ynIncR6', 'ynIncR7', 'yFlags', 'yE1', 'yE2', 
-    'EBV_Planck', 'EBV_PS1', 'class', 'prob_Galaxy', 'prob_Star', 'prob_QSO', 'extrapolation_Class', 
-    'cellDistance_Class', 'cellID_Class', 'z_phot', 'z_photErr', 'z_phot0', 'extrapolation_Photoz', 
-    'cellDistance_Photoz', 'cellID_Photoz']
+	'objID', 'raMean', 'raMeanErr', 'decMean', 'decMeanErr', 'l', 'b', 'distance_Deg', 'sqrErr_Arcsec', 
+	'BayesFactor', 'cntr', 'HtmID', 'ra', 'dec', 'sigra', 'sigdec', 'sigradec', 'cc_flags', 'ext_flg', 
+	'ph_qual', 'moon_lev', 'w1mpro', 'w1sigmpro', 'w1rchi2', 'w1sat', 'w1mag', 'w1sigm', 'w1flg', 
+	'w1mag_1', 'w1sigm_1', 'w1flg_1', 'w1mag_4', 'w1sigm_4', 'w1flg_4', 'w1mag_7', 'w1sigm_7', 'w1flg_7', 
+	'w2mpro', 'w2sigmpro', 'w2rchi2', 'w2sat', 'w2mag', 'w2sigm', 'w2flg', 'w2mag_1', 'w2sigm_1', 'w2flg_1', 
+	'w2mag_4', 'w2sigm_4', 'w2flg_4', 'w2mag_7', 'w2sigm_7', 'w2flg_7', 'w3mpro', 'w3sigmpro', 'w3rchi2', 
+	'w3sat', 'w3mag', 'w3sigm', 'w3flg', 'w3mag_1', 'w3sigm_1', 'w3flg_1', 'w3mag_4', 'w3sigm_4', 'w3flg_4', 
+	'w3mag_7', 'w3sigm_7', 'w3flg_7', 'w4mpro', 'w4sigmpro', 'w4rchi2', 'w4sat', 'w4mag', 'w4sigm', 'w4flg', 
+	'w4mag_1', 'w4sigm_1', 'w4flg_1', 'w4mag_4', 'w4sigm_4', 'w4flg_4', 'w4mag_7', 'w4sigm_7', 'w4flg_7', 
+	'gFPSFMag', 'gFPSFMagErr', 'gFKronMag', 'gFKronMagErr', 'gFApMag', 'gFApMagErr', 'gFmeanMagR5', 
+	'gFmeanMagR5Err', 'gFmeanMagR6', 'gFmeanMagR6Err', 'gFmeanMagR7', 'gFmeanMagR7Err', 'gnTotal', 
+	'gnIncPSFFlux', 'gnIncKronFlux', 'gnIncApFlux', 'gnIncR5', 'gnIncR6', 'gnIncR7', 'gFlags', 'gE1', 'gE2', 
+	'rFPSFMag', 'rFPSFMagErr', 'rFKronMag', 'rFKronMagErr', 'rFApMag', 'rFApMagErr', 'rFmeanMagR5', 
+	'rFmeanMagR5Err', 'rFmeanMagR6', 'rFmeanMagR6Err', 'rFmeanMagR7', 'rFmeanMagR7Err', 'rnTotal', 
+	'rnIncPSFFlux', 'rnIncKronFlux', 'rnIncApFlux', 'rnIncR5', 'rnIncR6', 'rnIncR7', 'rFlags', 'rE1', 'rE2', 
+	'iFPSFMag', 'iFPSFMagErr', 'iFKronMag', 'iFKronMagErr', 'iFApMag', 'iFApMagErr', 'iFmeanMagR5', 
+	'iFmeanMagR5Err', 'iFmeanMagR6', 'iFmeanMagR6Err', 'iFmeanMagR7', 'iFmeanMagR7Err', 'inTotal', 
+	'inIncPSFFlux', 'inIncKronFlux', 'inIncApFlux', 'inIncR5', 'inIncR6', 'inIncR7', 'iFlags', 'iE1', 'iE2', 
+	'zFPSFMag', 'zFPSFMagErr', 'zFKronMag', 'zFKronMagErr', 'zFApMag', 'zFApMagErr', 'zFmeanMagR5', 
+	'zFmeanMagR5Err', 'zFmeanMagR6', 'zFmeanMagR6Err', 'zFmeanMagR7', 'zFmeanMagR7Err', 'znTotal', 
+	'znIncPSFFlux', 'znIncKronFlux', 'znIncApFlux', 'znIncR5', 'znIncR6', 'znIncR7', 'zFlags', 'zE1', 'zE2', 
+	'yFPSFMag', 'yFPSFMagErr', 'yFKronMag', 'yFKronMagErr', 'yFApMag', 'yFApMagErr', 'yFmeanMagR5', 
+	'yFmeanMagR5Err', 'yFmeanMagR6', 'yFmeanMagR6Err', 'yFmeanMagR7', 'yFmeanMagR7Err', 'ynTotal', 
+	'ynIncPSFFlux', 'ynIncKronFlux', 'ynIncApFlux', 'ynIncR5', 'ynIncR6', 'ynIncR7', 'yFlags', 'yE1', 'yE2', 
+	'EBV_Planck', 'EBV_PS1', 'class', 'prob_Galaxy', 'prob_Star', 'prob_QSO', 'extrapolation_Class', 
+	'cellDistance_Class', 'cellID_Class', 'z_phot', 'z_photErr', 'z_phot0', 'extrapolation_Photoz', 
+	'cellDistance_Photoz', 'cellID_Photoz']
 
 
-    # Make sure requested columns exist 
+	# Make sure requested columns exist 
 	col_diff = set(requested_cols) - set(possible_cols) 
 	if len(col_diff) > 0:
 		raise Exception(f'Requested columns {col_diff} do not exist for catalog {match_cat_name}! Column options: {possible_cols}')
@@ -343,8 +344,8 @@ def STRM_crossmatch(
 			)
 
 		if match_tables is None:
-		    print("No data could be read. Skipping this chunk.")
-		    continue  
+			print("No data could be read. Skipping this chunk.")
+			continue  
 
 		if verbose:
 			loop_end = time.perf_counter()
