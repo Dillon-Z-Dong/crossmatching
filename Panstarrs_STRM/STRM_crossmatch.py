@@ -184,10 +184,10 @@ def STRM_out_of_field_filter(input_cat):
 
 
 
-def get_metadata(match_cat_name, requested_cols):
+def get_metadata(match_cat_name, requested_cols, metadata_dir = '/export/home/rabbit2/VLASS_tools/crossmatching/Panstarrs_STRM/'):
 
 	if match_cat_name == 'STRM_base':
-		metadata_table_name = 'STRM_base_metadata.csv'
+		metadata_table_name = os.path.join(metadata_dir,'STRM_base_metadata.csv')
 		datadir = '/lustre/aoc/sciops/ddong/Catalogs/PS1_STRM/data/output_chunks/hdf5_tables/'
 		possible_cols = [
     'objID', 'uniquePspsOBid', 'raMean', 'decMean', 'l', 'b', 'class', 'prob_Galaxy', 'prob_Star', 'prob_QSO',
@@ -196,7 +196,7 @@ def get_metadata(match_cat_name, requested_cols):
 
 
 	elif match_cat_name == 'STRM_WISE':
-		metadata_table_name = 'STRM_WISE_metadata.csv'
+		metadata_table_name = os.path.join(metadata_dir,'STRM_WISE_metadata.csv')
 		datadir = '/lustre/aoc/sciops/ddong/Catalogs/STRM_WISE/data/output_chunks/'
 		possible_cols = [
     'objID', 'raMean', 'raMeanErr', 'decMean', 'decMeanErr', 'l', 'b', 'distance_Deg', 'sqrErr_Arcsec', 
