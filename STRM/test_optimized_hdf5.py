@@ -226,6 +226,62 @@ def remove_buffer_overlap(df, ra_center, dec_center):
     
     return df[mask]
 
+
+def find_missing_columns(input_file, output_file):
+    """
+    Identify columns that differ between input and output files.
+    
+    Args:
+        input_file: Path to original input file
+        output_file: Path to optimized output file
+    """
+    # Read input data
+    input_df = pd.read_hdf(input_file, key='data/table')
+    input_cols = set(input_df.columns)
+    
+    # Read and combine all groups from optimized file
+    output_cols = set()
+    for group in COLUMN_GROUPS.keys():
+        try:
+            df = pd.read_hdf(output_file, key=group)
+            output_cols.update(df.columns)
+        except KeyError:
+            continue
+    
+    # Find differences
+    missing_in_output = input_cols - output_cols
+    missing_in_input = output_cols - input_cols
+    
+    print("\nColumn Comparison:")
+    print(f"Total input columns: {len(input_cols)}")
+    print(f"Total output columns: {len(output_cols)}")
+    
+    if missing_in_output:
+        print("\nColumns in input but missing from output:")
+        for col in sorted(missing_in_output):
+            print(f"  - {col}")
+    
+    if missing_in_input:
+        print("\nColumns in output but missing from input:")
+        for col in sorted(missing_in_input):
+            print(f"  - {col}")
+            
+    # Print which group each column belongs to
+    print("\nColumn Group Assignments:")
+    assigned_cols = set()
+    for group_name, columns in COLUMN_GROUPS.items():
+        group_cols = set(columns)
+        print(f"\n{group_name}:")
+        print("  Assigned but missing from input:", group_cols - input_cols)
+        print("  In input but not assigned:", [col for col in group_cols & input_cols if col not in assigned_cols])
+        assigned_cols.update(group_cols)
+    
+    unassigned = input_cols - assigned_cols
+    if unassigned:
+        print("\nColumns not assigned to any group:")
+        for col in sorted(unassigned):
+            print(f"  - {col}")
+
 def optimize_hdf5_file(input_file, output_file):
     """
     Create an optimized HDF5 file from input file using pandas.
@@ -337,3 +393,5 @@ if __name__ == "__main__":
     
     # Verify the output
     verify_optimized_file(input_file, output_file)
+
+    find_missing_columns(input_file, output_file)
