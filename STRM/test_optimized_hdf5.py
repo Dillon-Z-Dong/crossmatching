@@ -2,6 +2,7 @@ import h5py
 import numpy as np
 import pandas as pd
 from pathlib import Path
+import warnings
 
 # Column groupings from previous message here
 COLUMN_GROUPS = {
@@ -17,29 +18,30 @@ COLUMN_GROUPS = {
         'distance_Deg',   # PS1-WISE separation
         'sqrErr_Arcsec',  # Combined astrometric uncertainty
         'BayesFactor',    # Cross-match likelihood ratio
-        'HtmID',          # Hierarchical triangular mesh index
         'ra',             # WISE RA
         'dec',            # WISE Dec
         'sigra',          # WISE RA uncertainty
         'sigdec',         # WISE Dec uncertainty
-        'sigradec'        # WISE position error correlation
+        'sigradec',       # WISE position error correlation
+        'EBV_Planck',     # Planck dust map extinction
+        'EBV_PS1'         # PS1 dust map extinction
     ],
 
     # Neural network classifications and photometric redshifts
     'classification': [
-        'class',                 # GALAXY/STAR/QSO/UNSURE
-        'prob_Galaxy',           # Galaxy probability
-        'prob_Star',             # Star probability
-        'prob_QSO',              # Quasar probability
-        'extrapolation_Class',   # Classification extrapolation flag
-        'cellDistance_Class',    # Classification SOM cell distance
-        'cellID_Class',          # Classification SOM cell ID
-        'z_phot',               # Photometric redshift (Monte-Carlo)
-        'z_photErr',            # Redshift error
-        'z_phot0',              # Base photometric redshift
-        'extrapolation_Photoz',  # Photo-z extrapolation flag
-        'cellDistance_Photoz',   # Photo-z SOM cell distance
-        'cellID_Photoz'         # Photo-z SOM cell ID
+        'class',                # GALAXY/STAR/QSO/UNSURE
+        'prob_Galaxy',          # Galaxy probability
+        'prob_Star',            # Star probability
+        'prob_QSO',             # Quasar probability
+        'extrapolation_Class',  # Classification extrapolation flag
+        'cellDistance_Class',   # Classification SOM cell distance
+        'cellID_Class',         # Classification SOM cell ID
+        'z_phot',              # Photometric redshift (Monte-Carlo)
+        'z_photErr',           # Redshift error
+        'z_phot0',             # Base photometric redshift
+        'extrapolation_Photoz', # Photo-z extrapolation flag
+        'cellDistance_Photoz',  # Photo-z SOM cell distance
+        'cellID_Photoz'        # Photo-z SOM cell ID
     ],
 
     # Primary WISE photometry measurements
@@ -74,21 +76,33 @@ COLUMN_GROUPS = {
         'w4mag_7', 'w4sigm_7', 'w4flg_7'
     ],
 
-    # Primary PS1 photometry measurements
+    # Primary PS1 photometry measurements grouped by band
     'ps1_base': [
-        # PSF magnitudes for all bands
+        # g band primary measurements
         'gFPSFMag', 'gFPSFMagErr',
+        'gFKronMag', 'gFKronMagErr',
+        'gFApMag', 'gFApMagErr',
+        # r band primary measurements
         'rFPSFMag', 'rFPSFMagErr',
+        'rFKronMag', 'rFKronMagErr',
+        'rFApMag', 'rFApMagErr',
+        # i band primary measurements
         'iFPSFMag', 'iFPSFMagErr',
+        'iFKronMag', 'iFKronMagErr',
+        'iFApMag', 'iFApMagErr',
+        # z band primary measurements
         'zFPSFMag', 'zFPSFMagErr',
-        'yFPSFMag', 'yFPSFMagErr'
+        'zFKronMag', 'zFKronMagErr',
+        'zFApMag', 'zFApMagErr',
+        # y band primary measurements
+        'yFPSFMag', 'yFPSFMagErr',
+        'yFKronMag', 'yFKronMagErr',
+        'yFApMag', 'yFApMagErr'
     ],
 
     # Extended PS1 photometry and shape measurements
     'ps1_extended': [
         # g band extended measurements
-        'gFKronMag', 'gFKronMagErr',
-        'gFApMag', 'gFApMagErr',
         'gFmeanMagR5', 'gFmeanMagR5Err',
         'gFmeanMagR6', 'gFmeanMagR6Err',
         'gFmeanMagR7', 'gFmeanMagR7Err',
@@ -96,8 +110,6 @@ COLUMN_GROUPS = {
         'gnIncR5', 'gnIncR6', 'gnIncR7',
         'gE1', 'gE2',
         # r band extended measurements
-        'rFKronMag', 'rFKronMagErr',
-        'rFApMag', 'rFApMagErr',
         'rFmeanMagR5', 'rFmeanMagR5Err',
         'rFmeanMagR6', 'rFmeanMagR6Err',
         'rFmeanMagR7', 'rFmeanMagR7Err',
@@ -105,8 +117,6 @@ COLUMN_GROUPS = {
         'rnIncR5', 'rnIncR6', 'rnIncR7',
         'rE1', 'rE2',
         # i band extended measurements
-        'iFKronMag', 'iFKronMagErr',
-        'iFApMag', 'iFApMagErr',
         'iFmeanMagR5', 'iFmeanMagR5Err',
         'iFmeanMagR6', 'iFmeanMagR6Err',
         'iFmeanMagR7', 'iFmeanMagR7Err',
@@ -114,8 +124,6 @@ COLUMN_GROUPS = {
         'inIncR5', 'inIncR6', 'inIncR7',
         'iE1', 'iE2',
         # z band extended measurements
-        'zFKronMag', 'zFKronMagErr',
-        'zFApMag', 'zFApMagErr',
         'zFmeanMagR5', 'zFmeanMagR5Err',
         'zFmeanMagR6', 'zFmeanMagR6Err',
         'zFmeanMagR7', 'zFmeanMagR7Err',
@@ -123,8 +131,6 @@ COLUMN_GROUPS = {
         'znIncR5', 'znIncR6', 'znIncR7',
         'zE1', 'zE2',
         # y band extended measurements
-        'yFKronMag', 'yFKronMagErr',
-        'yFApMag', 'yFApMagErr',
         'yFmeanMagR5', 'yFmeanMagR5Err',
         'yFmeanMagR6', 'yFmeanMagR6Err',
         'yFmeanMagR7', 'yFmeanMagR7Err',
@@ -133,21 +139,21 @@ COLUMN_GROUPS = {
         'yE1', 'yE2'
     ],
 
-    # Quality flags and extinction
+    # Quality flags
     'flags': [
-        'cc_flags',    # WISE contamination flag
-        'ext_flg',     # WISE extended source flag
-        'ph_qual',     # WISE photometric quality
-        'moon_lev',    # WISE moonlight contamination
-        'gFlags',      # PS1 g-band flags
-        'rFlags',      # PS1 r-band flags
-        'iFlags',      # PS1 i-band flags
-        'zFlags',      # PS1 z-band flags
-        'yFlags',      # PS1 y-band flags
-        'EBV_Planck',  # Planck dust map extinction
-        'EBV_PS1'      # PS1 dust map extinction
+        'HtmID',      # Hierarchical triangular mesh index
+        'cc_flags',   # WISE contamination flag
+        'ext_flg',    # WISE extended source flag
+        'ph_qual',    # WISE photometric quality
+        'moon_lev',   # WISE moonlight contamination
+        'gFlags',     # PS1 g-band flags
+        'rFlags',     # PS1 r-band flags
+        'iFlags',     # PS1 i-band flags
+        'zFlags',     # PS1 z-band flags
+        'yFlags'      # PS1 y-band flags
     ]
 }
+
 
 def get_chunk_size(group_name, typical_rows=10):
     """
@@ -165,68 +171,88 @@ def get_chunk_size(group_name, typical_rows=10):
     # Round to nearest multiple of page size
     return (target_size // PAGE_SIZE) * PAGE_SIZE
 
+def read_input_file(input_file):
+    """
+    Read input HDF5 file using pandas.
+    
+    Args:
+        input_file: Path to input HDF5 file
+    
+    Returns:
+        pandas DataFrame containing all data
+    """
+    try:
+        # Read the HDF5 file - try different keys if 'data' doesn't work
+        try:
+            df = pd.read_hdf(input_file, key='data')
+        except KeyError:
+            df = pd.read_hdf(input_file, key='data/table')
+        
+        print(f"Successfully read {len(df)} rows from {input_file}")
+        return df
+    except Exception as e:
+        print(f"Error reading {input_file}: {str(e)}")
+        raise
+
 def optimize_hdf5_file(input_file, output_file):
     """
-    Create an optimized HDF5 file from input file.
+    Create an optimized HDF5 file from input file using pandas.
     
     Args:
         input_file: Path to input HDF5 file
         output_file: Path to write optimized file
     """
-    with h5py.File(input_file, 'r') as f_in:
-        # Get input data
-        table = f_in['data/table']
-        n_rows = table.shape[0]
-        
-        # Create output file
-        with h5py.File(output_file, 'w') as f_out:
-            # Create a group for our data
-            data_group = f_out.create_group('data')
+    print(f"\nProcessing {input_file}")
+    
+    # Read input data
+    df = read_input_file(input_file)
+    
+    # Create output file
+    store = pd.HDFStore(output_file, mode='w')
+    
+    try:
+        # Process each column group
+        for group_name, columns in COLUMN_GROUPS.items():
+            print(f"\nProcessing group: {group_name}")
             
-            # Process each column group
-            for group_name, columns in COLUMN_GROUPS.items():
-                print(f"Processing group: {group_name}")
-                # Calculate chunk size
-                chunk_size = get_chunk_size(group_name)
-                
-                # Create dataset for this group
-                # Note: We're using a compound dtype to keep related columns together
-                dtypes = []
-                for col in columns:
-                    if col in table.dtype.names:
-                        dtypes.append((col, table.dtype[col]))
-                
-                if not dtypes:
-                    print(f"No columns found for group {group_name}")
-                    continue  # Skip if no columns found for this group
-                
-                # Create the compound dtype
-                group_dtype = np.dtype(dtypes)
-                
-                # Calculate chunks in rows (chunk_size / bytes_per_row)
-                bytes_per_row = group_dtype.itemsize
-                rows_per_chunk = max(1, chunk_size // bytes_per_row)
-                
-                print(f"  Bytes per row: {bytes_per_row}")
-                print(f"  Rows per chunk: {rows_per_chunk}")
-                
-                # Create dataset
-                dset = data_group.create_dataset(
-                    group_name,
-                    shape=(n_rows,),
-                    dtype=group_dtype,
-                    chunks=(rows_per_chunk,),
-                    compression=None  # No compression for better memory mapping
-                )
-                
-                # Copy data
-                structured_array = np.empty(n_rows, dtype=group_dtype)
-                for col in columns:
-                    if col in table.dtype.names:
-                        structured_array[col] = table[col]
-                
-                dset[:] = structured_array
-                print(f"  Created dataset of size: {dset.nbytes / 1024 / 1024:.2f} MB")
+            # Filter columns that exist in the dataframe
+            available_cols = [col for col in columns if col in df.columns]
+            if not available_cols:
+                print(f"No columns found for group {group_name}")
+                continue
+            
+            # Create dataframe for this group
+            group_df = df[available_cols].copy()
+            
+            # Calculate chunk size in rows
+            chunk_size = get_chunk_size(group_name)
+            bytes_per_row = group_df.memory_usage(deep=True).sum() / len(group_df)
+            rows_per_chunk = max(1, chunk_size // int(bytes_per_row))
+            
+            print(f"  Columns: {', '.join(available_cols)}")
+            print(f"  Bytes per row: {bytes_per_row:.1f}")
+            print(f"  Rows per chunk: {rows_per_chunk}")
+            
+            # Store the group
+            store.put(
+                group_name,
+                group_df,
+                format='table',
+                complevel=None,  # No compression for better memory mapping
+                chunksize=rows_per_chunk,
+                # Additional performance options
+                data_columns=True,  # Enable searching/indexing
+                index=False  # Don't store the index
+            )
+            
+            # Report size
+            dataset_size = store.get_storer(group_name).nrows * bytes_per_row
+            print(f"  Dataset size: {dataset_size / 1024 / 1024:.2f} MB")
+            
+    finally:
+        store.close()
+    
+    print(f"\nCreated optimized file: {output_file}")
 
 def process_directory(input_dir, output_dir, pattern="chunk_ra_*_dec_*.h5"):
     """
@@ -241,23 +267,77 @@ def process_directory(input_dir, output_dir, pattern="chunk_ra_*_dec_*.h5"):
     output_path = Path(output_dir)
     output_path.mkdir(exist_ok=True, parents=True)
     
-    for input_file in input_path.glob(pattern):
-        # Create corresponding output filename
-        output_file = output_path / input_file.name
-        
-        print(f"Processing {input_file.name}...")
-        optimize_hdf5_file(str(input_file), str(output_file))
-        print(f"Created optimized file: {output_file}")
+    # Get list of all input files
+    input_files = list(input_path.glob(pattern))
+    print(f"Found {len(input_files)} files to process")
+    
+    # Process each file
+    for i, input_file in enumerate(input_files, 1):
+        try:
+            output_file = output_path / input_file.name
+            print(f"\nProcessing file {i}/{len(input_files)}: {input_file.name}")
+            optimize_hdf5_file(str(input_file), str(output_file))
+        except Exception as e:
+            print(f"Error processing {input_file}: {str(e)}")
+            continue
 
-# Example usage:
+def verify_optimized_file(input_file, output_file):
+    """
+    Verify that the optimized file contains the same data as the input file.
+    
+    Args:
+        input_file: Path to original input file
+        output_file: Path to optimized output file
+    """
+    print(f"\nVerifying {output_file}")
+    
+    # Read original data
+    input_df = read_input_file(input_file)
+    
+    # Read optimized data
+    store = pd.HDFStore(output_file, mode='r')
+    try:
+        # Combine all groups back into one dataframe
+        dfs = []
+        for group in store.keys():
+            group_name = group.lstrip('/')  # Remove leading slash
+            df = store.get(group)
+            print(f"Group {group_name}: {len(df)} rows, {len(df.columns)} columns")
+            dfs.append(df)
+        
+        output_df = pd.concat(dfs, axis=1)
+        
+        # Compare number of rows and columns
+        print(f"\nInput shape: {input_df.shape}")
+        print(f"Output shape: {output_df.shape}")
+        
+        # Compare column values
+        common_cols = set(input_df.columns) & set(output_df.columns)
+        print(f"\nCommon columns: {len(common_cols)}")
+        
+        for col in common_cols:
+            if not np.array_equal(input_df[col].values, output_df[col].values):
+                print(f"Warning: Mismatch in column {col}")
+    
+    finally:
+        store.close()
+
 if __name__ == "__main__":
+    # Suppress pandas warnings about performance
+    warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
+    
     input_dir = "/lustre/aoc/sciops/ddong/Catalogs/STRM_WISE/data/output_chunks"
     output_dir = "/lustre/aoc/sciops/ddong/Catalogs/STRM_WISE/data/optimized_chunks"
     
-    # Create output directory if it doesn't exist
+    # Create output directory
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     
     # Test with a single file first
     input_file = f"{input_dir}/chunk_ra_227.5_dec_56.5.h5"
     output_file = f"{output_dir}/chunk_ra_227.5_dec_56.5.h5"
+    
+    # Process the file
     optimize_hdf5_file(input_file, output_file)
+    
+    # Verify the output
+    verify_optimized_file(input_file, output_file)
