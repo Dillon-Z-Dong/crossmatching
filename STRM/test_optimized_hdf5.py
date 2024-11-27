@@ -207,51 +207,46 @@ def optimize_hdf5_file(input_file, output_file):
     # Read input data
     df = read_input_file(input_file)
     
-    # Create output file
-    store = pd.HDFStore(output_file, mode='w')
-    
-    try:
-        # Process each column group
-        for group_name, columns in COLUMN_GROUPS.items():
-            print(f"\nProcessing group: {group_name}")
-            
-            # Filter columns that exist in the dataframe
-            available_cols = [col for col in columns if col in df.columns]
-            if not available_cols:
-                print(f"No columns found for group {group_name}")
-                continue
-            
-            # Create dataframe for this group
-            group_df = df[available_cols].copy()
-            
-            # Calculate chunk size in rows
-            chunk_size = get_chunk_size(group_name)
-            bytes_per_row = group_df.memory_usage(deep=True).sum() / len(group_df)
-            rows_per_chunk = max(1, chunk_size // int(bytes_per_row))
-            
-            print(f"  Columns: {', '.join(available_cols)}")
-            print(f"  Bytes per row: {bytes_per_row:.1f}")
-            print(f"  Rows per chunk: {rows_per_chunk}")
-            
-            # Store the group
-            store.put(
-                group_name,
-                group_df,
-                format='table',
-                complevel=None,  # No compression for better memory mapping
-                chunksize=rows_per_chunk,
-                # Additional performance options
-                data_columns=True,  # Enable searching/indexing
-                index=False  # Don't store the index
-            )
-            
-            # Report size
-            dataset_size = store.get_storer(group_name).nrows * bytes_per_row
-            print(f"  Dataset size: {dataset_size / 1024 / 1024:.2f} MB")
-            
-    finally:
-        store.close()
-    
+    # Process each column group
+    for group_name, columns in COLUMN_GROUPS.items():
+        print(f"\nProcessing group: {group_name}")
+        
+        # Filter columns that exist in the dataframe
+        available_cols = [col for col in columns if col in df.columns]
+        if not available_cols:
+            print(f"No columns found for group {group_name}")
+            continue
+        
+        # Create dataframe for this group
+        group_df = df[available_cols].copy()
+        
+        # Calculate chunk size in rows
+        chunk_size = get_chunk_size(group_name)
+        bytes_per_row = group_df.memory_usage(deep=True).sum() / len(group_df)
+        rows_per_chunk = max(1, chunk_size // int(bytes_per_row))
+        
+        print(f"  Columns: {', '.join(available_cols)}")
+        print(f"  Bytes per row: {bytes_per_row:.1f}")
+        print(f"  Rows per chunk: {rows_per_chunk}")
+        
+        # Configure PyTables settings
+        tables.parameters.CHUNK_SIZE = chunk_size
+        tables.parameters.CHUNK_CACHE_SIZE = chunk_size * 8  # Cache 8 chunks
+        
+        # Save this group to the HDF5 file
+        group_df.to_hdf(
+            output_file,
+            key=group_name,
+            mode='a',  # Append mode since we're writing multiple groups
+            format='table',
+            complevel=None,  # No compression for better memory mapping
+            data_columns=True,  # Enable searching/indexing
+            index=False  # Don't store the index
+        )
+        
+        # Report size
+        print(f"  Dataset size: {group_df.memory_usage(deep=True).sum() / 1024 / 1024:.2f} MB")
+
     print(f"\nCreated optimized file: {output_file}")
 
 def process_directory(input_dir, output_dir, pattern="chunk_ra_*_dec_*.h5"):
@@ -294,33 +289,30 @@ def verify_optimized_file(input_file, output_file):
     # Read original data
     input_df = read_input_file(input_file)
     
-    # Read optimized data
-    store = pd.HDFStore(output_file, mode='r')
-    try:
-        # Combine all groups back into one dataframe
-        dfs = []
-        for group in store.keys():
-            group_name = group.lstrip('/')  # Remove leading slash
-            df = store.get(group)
-            print(f"Group {group_name}: {len(df)} rows, {len(df.columns)} columns")
+    # Read and combine all groups from optimized file
+    dfs = []
+    for group in COLUMN_GROUPS.keys():
+        try:
+            df = pd.read_hdf(output_file, key=group)
+            print(f"Group {group}: {len(df)} rows, {len(df.columns)} columns")
             dfs.append(df)
-        
-        output_df = pd.concat(dfs, axis=1)
-        
-        # Compare number of rows and columns
-        print(f"\nInput shape: {input_df.shape}")
-        print(f"Output shape: {output_df.shape}")
-        
-        # Compare column values
-        common_cols = set(input_df.columns) & set(output_df.columns)
-        print(f"\nCommon columns: {len(common_cols)}")
-        
-        for col in common_cols:
-            if not np.array_equal(input_df[col].values, output_df[col].values):
-                print(f"Warning: Mismatch in column {col}")
+        except KeyError:
+            print(f"Group {group} not found in output file")
+            continue
     
-    finally:
-        store.close()
+    output_df = pd.concat(dfs, axis=1)
+    
+    # Compare number of rows and columns
+    print(f"\nInput shape: {input_df.shape}")
+    print(f"Output shape: {output_df.shape}")
+    
+    # Compare column values
+    common_cols = set(input_df.columns) & set(output_df.columns)
+    print(f"\nCommon columns: {len(common_cols)}")
+    
+    for col in common_cols:
+        if not np.array_equal(input_df[col].values, output_df[col].values):
+            print(f"Warning: Mismatch in column {col}")
 
 if __name__ == "__main__":
     # Suppress pandas warnings about performance
