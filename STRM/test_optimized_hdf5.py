@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 import warnings
+import tables
 
 # Column groupings from previous message here
 COLUMN_GROUPS = {
