@@ -281,59 +281,6 @@ def find_missing_columns(input_file, output_file):
             print(f"  - {col}")
 
 
-def optimize_hdf5_file(input_file, output_file):
-    """
-    Create an optimized HDF5 file from input file using pandas.
-    Modified to remove buffer overlap and rename 'class' to 'objclass'.
-    """
-    print(f"\nProcessing {input_file}")
-    
-    # Extract tile center from filename
-    filename = Path(input_file).name
-    ra_center = float(filename.split('_')[2])
-    dec_center = float(filename.split('_')[4].split('.')[0])
-    
-    # Read input data
-    df = read_input_file(input_file)
-    
-    # Remove buffer overlap
-    df = remove_buffer_overlap(df, ra_center, dec_center)
-    
-    # Rename 'class' column to 'objclass'
-    if 'class' in df.columns:
-        df = df.rename(columns={'class': 'objclass'})
-    
-    # Rest of the function remains the same...
-    
-    print(f"\nCreated optimized file: {output_file}")
-    print(f"Original rows: {len(df)}, After removing buffer: {len(df)}")
-
-def process_directory(input_dir, output_dir, pattern="chunk_ra_*_dec_*.h5"):
-    """
-    Process all matching files in input directory.
-    
-    Args:
-        input_dir: Path to directory containing input files
-        output_dir: Path to write optimized files
-        pattern: Glob pattern to match input files
-    """
-    input_path = Path(input_dir)
-    output_path = Path(output_dir)
-    output_path.mkdir(exist_ok=True, parents=True)
-    
-    # Get list of all input files
-    input_files = list(input_path.glob(pattern))
-    print(f"Found {len(input_files)} files to process")
-    
-    # Process each file
-    for i, input_file in enumerate(input_files, 1):
-        try:
-            output_file = output_path / input_file.name
-            print(f"\nProcessing file {i}/{len(input_files)}: {input_file.name}")
-            optimize_hdf5_file(str(input_file), str(output_file))
-        except Exception as e:
-            print(f"Error processing {input_file}: {str(e)}")
-            continue
 
 def verify_optimized_file(input_file, output_file):
     """
@@ -373,6 +320,70 @@ def verify_optimized_file(input_file, output_file):
         if not np.array_equal(input_df[col].values, output_df[col].values):
             print(f"Warning: Mismatch in column {col}")
 
+def optimize_hdf5_file(input_file, output_file):
+    """
+    Create an optimized HDF5 file from input file using pandas.
+    Modified to remove buffer overlap and properly rename 'class' to 'objclass'.
+    """
+    print(f"\nProcessing {input_file}")
+    
+    # Extract tile center from filename
+    filename = Path(input_file).name
+    ra_center = float(filename.split('_')[2])
+    dec_center = float(filename.split('_')[4].split('.')[0])
+    
+    # Read input data
+    df = read_input_file(input_file)
+    
+    # Remove buffer overlap
+    df = remove_buffer_overlap(df, ra_center, dec_center)
+    
+    # Rename 'class' to 'objclass'
+    df = df.rename(columns={'class': 'objclass'})
+    
+    # Process each column group
+    for group_name, columns in COLUMN_GROUPS.items():
+        print(f"\nProcessing group: {group_name}")
+        
+        # Filter columns that exist in the dataframe
+        available_cols = [col for col in columns if col in df.columns]
+        if not available_cols:
+            print(f"No columns found for group {group_name}")
+            continue
+        
+        # Create dataframe for this group
+        group_df = df[available_cols].copy()
+        
+        # Calculate chunk size in rows
+        chunk_size = get_chunk_size(group_name)
+        bytes_per_row = group_df.memory_usage(deep=True).sum() / len(group_df)
+        rows_per_chunk = max(1, chunk_size // int(bytes_per_row))
+        
+        print(f"  Columns: {', '.join(available_cols)}")
+        print(f"  Bytes per row: {bytes_per_row:.1f}")
+        print(f"  Rows per chunk: {rows_per_chunk}")
+        
+        # Configure PyTables settings
+        tables.parameters.CHUNK_SIZE = chunk_size
+        tables.parameters.CHUNK_CACHE_SIZE = chunk_size * 8  # Cache 8 chunks
+        
+        # Save this group to the HDF5 file
+        group_df.to_hdf(
+            output_file,
+            key=group_name,
+            mode='a',
+            format='table',
+            complevel=None,  # No compression for better memory mapping
+            data_columns=True,
+            index=False
+        )
+        
+        # Report size
+        print(f"  Dataset size: {group_df.memory_usage(deep=True).sum() / 1024 / 1024:.2f} MB")
+    
+    print(f"\nCreated optimized file: {output_file}")
+    print(f"Original rows: {len(df)}")
+
 if __name__ == "__main__":
     # Suppress pandas warnings about performance
     warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
@@ -390,7 +401,6 @@ if __name__ == "__main__":
     # Process the file
     optimize_hdf5_file(input_file, output_file)
     
-    # Verify the output
+    # Verify and analyze the output
     verify_optimized_file(input_file, output_file)
-
     find_missing_columns(input_file, output_file)
