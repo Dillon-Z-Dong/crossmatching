@@ -230,22 +230,19 @@ def remove_buffer_overlap(df, ra_center, dec_center):
 def find_missing_columns(input_file, output_file):
     """
     Identify columns that differ between input and output files.
-    
-    Args:
-        input_file: Path to original input file
-        output_file: Path to optimized output file
     """
-    # Read input data
-    input_df = pd.read_hdf(input_file, key='data/table')
+    # Read input data using our working read function
+    input_df = read_input_file(input_file)
     input_cols = set(input_df.columns)
     
-    # Read and combine all groups from optimized file
+    # Read output groups
     output_cols = set()
     for group in COLUMN_GROUPS.keys():
         try:
             df = pd.read_hdf(output_file, key=group)
             output_cols.update(df.columns)
         except KeyError:
+            print(f"Warning: Group {group} not found in output file")
             continue
     
     # Find differences
@@ -271,9 +268,10 @@ def find_missing_columns(input_file, output_file):
     assigned_cols = set()
     for group_name, columns in COLUMN_GROUPS.items():
         group_cols = set(columns)
-        print(f"\n{group_name}:")
-        print("  Assigned but missing from input:", group_cols - input_cols)
-        print("  In input but not assigned:", [col for col in group_cols & input_cols if col not in assigned_cols])
+        assigned_here = group_cols & input_cols
+        if assigned_here:
+            print(f"\n{group_name} ({len(assigned_here)} columns):")
+            print("  Columns:", sorted(assigned_here))
         assigned_cols.update(group_cols)
     
     unassigned = input_cols - assigned_cols
@@ -281,6 +279,7 @@ def find_missing_columns(input_file, output_file):
         print("\nColumns not assigned to any group:")
         for col in sorted(unassigned):
             print(f"  - {col}")
+
 
 def optimize_hdf5_file(input_file, output_file):
     """
