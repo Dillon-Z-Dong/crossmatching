@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
+# Column groupings from previous message here
 COLUMN_GROUPS = {
     # Essential position and identification information
     'core': [
@@ -84,7 +85,7 @@ COLUMN_GROUPS = {
     ],
 
     # Extended PS1 photometry and shape measurements
-    'ps1_extended': {
+    'ps1_extended': [
         # g band extended measurements
         'gFKronMag', 'gFKronMagErr',
         'gFApMag', 'gFApMagErr',
@@ -130,7 +131,7 @@ COLUMN_GROUPS = {
         'ynTotal', 'ynIncPSFFlux', 'ynIncKronFlux', 'ynIncApFlux',
         'ynIncR5', 'ynIncR6', 'ynIncR7',
         'yE1', 'yE2'
-    },
+    ],
 
     # Quality flags and extinction
     'flags': [
@@ -184,6 +185,7 @@ def optimize_hdf5_file(input_file, output_file):
             
             # Process each column group
             for group_name, columns in COLUMN_GROUPS.items():
+                print(f"Processing group: {group_name}")
                 # Calculate chunk size
                 chunk_size = get_chunk_size(group_name)
                 
@@ -195,6 +197,7 @@ def optimize_hdf5_file(input_file, output_file):
                         dtypes.append((col, table.dtype[col]))
                 
                 if not dtypes:
+                    print(f"No columns found for group {group_name}")
                     continue  # Skip if no columns found for this group
                 
                 # Create the compound dtype
@@ -203,6 +206,9 @@ def optimize_hdf5_file(input_file, output_file):
                 # Calculate chunks in rows (chunk_size / bytes_per_row)
                 bytes_per_row = group_dtype.itemsize
                 rows_per_chunk = max(1, chunk_size // bytes_per_row)
+                
+                print(f"  Bytes per row: {bytes_per_row}")
+                print(f"  Rows per chunk: {rows_per_chunk}")
                 
                 # Create dataset
                 dset = data_group.create_dataset(
@@ -220,6 +226,7 @@ def optimize_hdf5_file(input_file, output_file):
                         structured_array[col] = table[col]
                 
                 dset[:] = structured_array
+                print(f"  Created dataset of size: {dset.nbytes / 1024 / 1024:.2f} MB")
 
 def process_directory(input_dir, output_dir, pattern="chunk_ra_*_dec_*.h5"):
     """
@@ -232,7 +239,7 @@ def process_directory(input_dir, output_dir, pattern="chunk_ra_*_dec_*.h5"):
     """
     input_path = Path(input_dir)
     output_path = Path(output_dir)
-    output_path.mkdir(exist_ok=True)
+    output_path.mkdir(exist_ok=True, parents=True)
     
     for input_file in input_path.glob(pattern):
         # Create corresponding output filename
@@ -246,6 +253,9 @@ def process_directory(input_dir, output_dir, pattern="chunk_ra_*_dec_*.h5"):
 if __name__ == "__main__":
     input_dir = "/lustre/aoc/sciops/ddong/Catalogs/STRM_WISE/data/output_chunks"
     output_dir = "/lustre/aoc/sciops/ddong/Catalogs/STRM_WISE/data/optimized_chunks"
+    
+    # Create output directory if it doesn't exist
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
     
     # Test with a single file first
     input_file = f"{input_dir}/chunk_ra_227.5_dec_56.5.h5"
